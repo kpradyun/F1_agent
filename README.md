@@ -1,335 +1,106 @@
-# F1 Race Engineer Agent 🏎️
+# F1 Race Engineer Agent
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+
 [![FastF1](https://img.shields.io/badge/FastF1-enabled-red.svg)](https://github.com/theOehrly/Fast-F1)
+
 [![LangChain](https://img.shields.io/badge/LangChain-powered-green.svg)](https://www.langchain.com/)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-An intelligent F1 data analysis agent powered by LangChain, FastF1, OpenF1 API, and LLM technology.
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black) 
 
-- 🚀 **28 Total Tools** (4 new quick lookup tools!)
-- ⚡ **Complete OpenF1 API Coverage** (100% of endpoints)
-- 📊 **Instant Record Lookups** (< 1ms response time)
-- 🔄 **Smart Multi-Level Caching** (60-70% cache hit rate)
-- 🎯 **100% Proactive** - Agent fetches data, never just suggests!
-- 🎮 **Interactive Race Replay** - Visual race playback with telemetry
+An intelligent Formula 1 data analysis agent powered by LangChain, FastF1, OpenF1 API, and LLM technology. This system provides real-time telemetry, historical record lookups, and interactive race visualizations.
 
-## 📑 Table of Contents
+## Core Capabilities
 
-- [What Can It Do?](#-what-can-it-do)
-- [Quick Start](#-quick-start)
-- [Features](#-what-makes-this-special)
-- [Project Structure](#-project-structure)
-- [All Tools](#-all-28-tools)
-- [Usage Examples](#-usage-examples)
-- [Performance](#-performance)
-- [Configuration](#-configuration)
-- [Contributing](#-contributing)
+The agent processes natural language queries to provide data-driven insights:
 
-## 🎯 What Can It Do?
+* **Historical Records:** Instant access to world champions, pole positions, and race winners from 1950 to the present.
+* **Race Analysis:** Comparative driver telemetry, tire strategy breakdowns, and pit stop performance metrics.
+* **Live Data:** Real-time weather, DRS status, car speeds, and track positions via OpenF1 API integration.
+* **Interactive Visualization:** Animated race replays, strategy Gantt charts, and interactive telemetry plots.
 
-Ask anything about F1 and get instant, comprehensive answers:
+## Performance Metrics
 
-### 🏆 Historical Records (Instant)
-- "List of all race winners in 2023"
-- "Who has the most pole positions?"
-- "F1 world champions since 2000"
-- "Constructor championships by team"
+| Query Type | Latency | Technology |
+| :--- | :--- | :--- |
+| **Quick Lookup** | < 1ms | Local Metadata |
+| **Cached Data** | < 1s | Multi-level Cache |
+| **Live API** | 1–3s | OpenF1 Integration |
+| **Deep Analysis** | 5–15s | FastF1 / Pandas |
+| **Race Replay** | 1–3 min | Arcade Engine |
 
-### 📊 Race Analysis
-- "Compare Verstappen vs Hamilton at Monaco 2024"
-- "Tire strategy for the last race"
-- "Championship standings after round 10"
-- "Pit stop analysis for Red Bull"
+## Project Structure
 
-### 🔴 Live Data
-- "Current weather at the track"
-- "Live race positions and gaps"
-- "Is DRS active?"
-- "Verstappen's current speed"
+```text
+F1_agent/
+├── main.py                # Main entry point
+├── replay_ui.py           # Interactive race replay engine
+├── rag_engine.py          # FIA regulations RAG (FAISS)
+├── core/                  # API clients and session resolution
+├── tools/                 # 28 specialized analysis tools
+├── utils/                 # Caching and validation logic
+└── config/                # Environment and UI settings
+```
 
-### 🎮 Interactive Features
-- "Replay Monaco 2023 race" (visual animation!)
-- "Interactive telemetry comparison"
-- "Strategy Gantt chart for all drivers"
+## Installation
 
+### Prerequisites
+* **Python:** 3.10 or higher
+* **Ollama:** Local LLM runner (installed and running)
+* **Hardware:** 8GB RAM minimum (16GB recommended)
 
-
-## 🚀 Quick Start
-
+### Setup
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/F1_agent.git
+git clone [https://github.com/YOUR_USERNAME/F1_agent.git](https://github.com/YOUR_USERNAME/F1_agent.git)
 cd F1_agent
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Install Ollama (if not already installed)
-# Visit: https://ollama.ai
-
-# Pull LLM model
+# Pull the required LLM
 ollama pull qwen2.5:7b
 
 # Run the agent
 python main.py
 ```
 
-Then ask away:
-```
-You: List of all race winners in 2023
+## Toolset Overview
 
-Engineer: [Fetches all 22 races]
-=== 2023 F1 Season - Race Winners ===
+The agent utilizes a suite of **28 specialized tools** categorized by function:
 
-Round 1: Bahrain Grand Prix (Sakhir) - 2023-03-05
-  Winner: Max Verstappen (Red Bull Racing)
+* **Reference Tools:** Access to world champions, season winners, fastest lap records, and team championships.
+* **Analysis Tools:** Schedule tracking, telemetry plotting, and tire strategy analysis.
+* **Live Tools:** Real-time weather monitoring, track position maps, and timing intervals.
+* **Advanced Tools:** In-depth pit stop analysis, radio logs, and car-specific telemetry.
+* **Predictive & Visual:** Tire life degradation models and interactive race animations.
 
-Round 2: Saudi Arabian Grand Prix (Jeddah) - 2023-03-19
-  Winner: Sergio Perez (Red Bull Racing)
 
-... [all races]
 
-=== Season Summary ===
-Most Wins by Driver:
-  Max Verstappen: 19 wins
-  Sergio Perez: 2 wins
-  Carlos Sainz: 1 win
-```
+---
 
-### Prerequisites
+## Configuration
 
-- Python 3.10 or higher
-- Ollama (for local LLM)
-- 8GB RAM minimum (16GB recommended)
+Custom settings can be managed via environment variables or by editing `config/settings.py`:
 
-### Quick Install
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| **OLLAMA_MODEL** | The specific LLM to use via Ollama | `qwen2.5:7b` |
+| **DEFAULT_YEAR** | The fallback season for data queries | `2024` |
+| **API_TIMEOUT** | Maximum duration for live data requests | `15s` |
 
-```bash
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+---
 
-# Install package
-pip install -e .
+## Troubleshooting
 
-# Or install from requirements.txt
-pip install -r requirements.txt
-```
+* **Model Connectivity:** Ensure the Ollama service is active. You can verify this by running `ollama list` in your terminal before launching `main.py`.
+* **Data Limits:** While historical records go back to 1950, high-resolution telemetry and advanced lap data are generally only available for the **2018 season onwards**.
+* **First-Run Latency:** The initial fetch for a new race session involves downloading large datasets. Subsequent queries are served instantly from the local multi-level cache.
 
-## ✨ What Makes This Special?
+---
 
-### ⚡ Instant Lookups
-- World champions: < 1ms
-- Pole positions: < 1ms
-- Fastest laps: < 1ms
-- Constructor titles: < 1ms
-- Race winners: Instant (cached) or ~2min (first fetch)
+## Acknowledgments
 
-### 📊 Comprehensive Analysis
-Every response includes:
-- Main data requested
-- Summary statistics
-- Relevant insights
-- Source information
-
-### 🎮 Interactive Visualization
-- Live race replay with car positions
-- Telemetry data visualization
-- Strategy Gantt charts
-- Circuit maps with sector times
-
-## 📁 Project Structure
-
-```
-F1_agent/
-├── main.py                   # Main entry point
-├── replay_ui.py              # Interactive race replay
-├── rag_engine.py            # FIA regulations RAG
-├── setup.py                  # Package setup
-├── requirements.txt          # Dependencies
-│
-├── config/                   # Configuration
-│   ├── settings.py          # Main settings
-│   └── ui_settings.py       # UI constants
-│
-├── core/                     # Core functionality
-│   ├── fastf1_adapter.py   # FastF1 wrapper
-│   ├── api_client.py        # OpenF1 API client
-│   ├── session_resolver.py  # Session resolver
-│   ├── analytics.py         # Analytics engine
-│   └── monitor.py           # Live monitoring
-│
-├── tools/                    # F1 analysis tools (28 tools)
-│   ├── reference_tools.py   # Historical records
-│   ├── analysis_tools.py    # Race analysis
-│   ├── live_tools.py        # Real-time data
-│   ├── advanced_tools.py    # Detailed analytics
-│   ├── predictive_tools.py  # Predictions
-│   ├── visualization_tools.py # Charts
-│   └── replay_tools.py      # Race replay
-│
-├── utils/                    # Utilities
-│   ├── validators.py        # Input validation
-│   ├── cache_manager.py     # Caching system
-│   ├── async_tools.py       # Async wrapper
-│   └── quick_lookup.py      # Quick lookups
-│
-├── data/                     # Static data
-├── docs/                     # Documentation
-│   ├── SETUP.md            # Setup guide
-│   └── architecture.py      # Architecture diagram
-│
-├── examples/                 # Example scripts
-└── f1_rules_db/             # RAG database
-```
-
-## 🛠️ All 28 Tools
-
-### 📚 Reference Tools (6)
-1. **f1_champions_quick_lookup** - World champions
-2. **f1_season_race_winners** - Race winners by season
-3. **f1_fastest_lap_records** - Fastest lap statistics
-4. **f1_pole_position_records** - Pole position records
-5. **f1_constructor_champions** - Team championships
-6. **f1_wikipedia_lookup** - General F1 knowledge
-
-### 📊 Analysis Tools (6)
-7. **f1_schedule** - Race calendar
-8. **f1_session_results** - Race/Qualifying/Sprint results
-9. **f1_telemetry_plot** - Driver comparison charts
-10. **f1_tire_strategy** - Tire strategy analysis
-11. **f1_championship_calculator** - Championship standings
-12. **f1_race_weekend_summary** - Complete weekend report
-
-### 🔴 Live Tools (3)
-13. **f1_live_weather** - Current weather
-14. **f1_live_position_map** - Track position visualization
-15. **f1_live_intervals** - Live timing gaps
-
-### 🔬 Advanced Tools (8)
-16. **f1_live_car_telemetry** - Real-time car data
-17. **f1_driver_info** - Driver information
-18. **f1_pit_stop_analysis** - Pit stop performance
-19. **f1_race_control_messages** - Race control events
-20. **f1_position_changes** - Position tracking
-21. **f1_stint_analysis** - Tire stint breakdown
-22. **f1_team_radio_log** - Radio communications
-23. **f1_lap_analysis** - Lap time analysis
-
-### 🔮 Predictive Tools (2)
-24. **f1_predict_tire_life** - Tire degradation prediction
-25. **f1_predict_overtake** - Overtake possibility
-
-### 📈 Visualization Tools (2)
-26. **f1_plot_telemetry_interactive** - Interactive telemetry
-27. **f1_plot_strategy_gantt** - Strategy Gantt chart
-
-### 🎮 Replay Tools (1)
-28. **f1_race_replay** - Interactive race animation
-
-## 🎯 Usage Examples
-
-```bash
-python main.py
-```
-
-```
-# Historical Records (Instant)
-> Who has the most pole positions?
-> List of F1 champions since 2010
-> All race winners in 2023
-
-# Live Data
-> Current weather at the track
-> Live race positions
-> What's Verstappen's current speed?
-
-# Analysis
-> Compare VER vs HAM at Monaco 2024
-> Tire strategy for the last race
-> Championship standings after round 10
-
-# Predictions
-> Will Hamilton catch Verstappen?
-> How are Leclerc's tires holding up?
-
-# Replay
-> Replay Monaco 2023 race
-```
-
-## 📊 Performance
-
-| Query Type | Response Time | Example |
-|------------|---------------|---------|
-| Quick Lookup | < 1ms | "F1 champions" |
-| Cached Data | < 1s | Previous queries |
-| Live API | 1-3s | "Current weather" |
-| Analysis | 5-15s | Telemetry plot |
-| Race Replay | 1-3 min | Visual animation |
-
-## 🔧 Configuration
-
-### Environment Variables
-
-Copy `.env.example` to `.env` and customize:
-
-```bash
-OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_BASE_URL=http://localhost:11434
-DEFAULT_YEAR=2024
-```
-
-### Application Settings
-
-Edit `config/settings.py`:
-
-```python
-DATA_DEFAULT_YEAR = 2024      # Default season
-LLM_MODEL = "qwen2.5:7b"      # LLM model
-API_TIMEOUT = 15               # API timeout
-```
-
-## 📦 Dependencies
-
-- **LangChain & LangGraph** - Agent framework
-- **FastF1** - Historical F1 data
-- **OpenF1 API** - Live F1 data
-- **Ollama** - Local LLM
-- **Pandas & NumPy** - Data processing
-- **Matplotlib** - Visualization
-- **Arcade** - Race replay visualization
-- **FAISS** - Regulation search
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Agent not responding?**
-- Check Ollama is running: `ollama list`
-- Verify model is installed: `ollama pull qwen2.5:7b`
-
-**No data for recent races?**
-- FastF1 data available for 2018+
-- Live data requires active session
-
-**Slow first query?**
-- First fetch downloads and caches data
-- Subsequent queries use cache (instant)
-
-**See logs**: `f1_agent.log`
-
-### Quick Contribution Guide
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## 🙏 Acknowledgments
-
-- **FastF1** - Excellent F1 data library
-- **OpenF1** - Comprehensive F1 API
-- **LangChain** - Agent framework
-- **FIA** - Regulation documents
+* **FastF1:** For the robust historical data processing.
+* **OpenF1:** For the comprehensive real-time API coverage.
+* **LangChain:** For the agentic framework and tool-calling logic.
