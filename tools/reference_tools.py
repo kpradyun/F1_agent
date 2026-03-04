@@ -7,6 +7,7 @@ import re
 from functools import lru_cache
 import wikipedia
 from langchain_core.tools import tool
+from config.settings import TAVILY_API_KEY
 
 logger = logging.getLogger("ReferenceTools")
 
@@ -155,6 +156,57 @@ async def f1_wikipedia_lookup(query: str) -> str:
         logger.error(f"Wikipedia search failed: {e}")
         return f"Error searching Wikipedia: {e}"
 
+
+
+
+@tool
+async def f1_tavily_search(query: str) -> str:
+    """
+    Use for fresh web/news lookups that are not in FastF1/OpenF1/Wikipedia.
+    Best for: breaking news, latest incidents, team statements, and rumor verification.
+    """
+    if not TAVILY_API_KEY:
+        return "Tavily is not configured. Set TAVILY_API_KEY in your environment."
+
+    try:
+        from tavily import TavilyClient
+        from utils.async_tools import get_async_wrapper
+
+        wrapper = get_async_wrapper()
+
+        def _search():
+            client = TavilyClient(api_key=TAVILY_API_KEY)
+            return client.search(
+                query=f"Formula 1 {query}",
+                topic="news",
+                search_depth="advanced",
+                max_results=5,
+                include_answer=True
+            )
+
+        data = await wrapper.run_sync_tool(_search)
+        answer = data.get('answer', '') if isinstance(data, dict) else ''
+        results = data.get('results', []) if isinstance(data, dict) else []
+
+        out = "=== Tavily F1 Web Search ===\n"
+        if answer:
+            out += f"\nSummary: {answer}\n"
+        if not results:
+            out += "\nNo results found."
+            return out
+
+        out += "\nSources:\n"
+        for idx, item in enumerate(results[:5], 1):
+            title = item.get('title', 'Untitled')
+            url = item.get('url', 'n/a')
+            snippet = (item.get('content', '') or '').strip()
+            if len(snippet) > 220:
+                snippet = snippet[:220] + '...'
+            out += f"{idx}. {title}\n   {url}\n   {snippet}\n"
+        return out
+    except Exception as e:
+        logger.error(f"Tavily search failed: {e}")
+        return f"Error searching Tavily: {e}"
 
 @tool
 async def f1_champions_quick_lookup(year_filter: str = "") -> str:
@@ -519,5 +571,6 @@ def get_reference_tools() -> list:
         f1_fastest_lap_records,  # Fastest lap records
         f1_pole_position_records,  # Pole position records
         f1_constructor_champions,  # Constructor champions
-        f1_wikipedia_lookup  # Wikipedia fallback for other queries
+        f1_wikipedia_lookup,  # Wikipedia fallback for other queries
+        f1_tavily_search  # Live web/news lookup
     ]

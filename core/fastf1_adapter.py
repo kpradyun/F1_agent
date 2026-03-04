@@ -6,6 +6,14 @@ import os
 import logging
 import matplotlib.pyplot as plt
 from datetime import timedelta
+from typing import Optional
+from collections import OrderedDict
+from threading import RLock
+
+
+_SESSION_CACHE = OrderedDict()
+_SESSION_CACHE_LIMIT = 8
+_SESSION_CACHE_LOCK = RLock()
 
 logger = logging.getLogger("F1_Data_Miner")
 
@@ -82,18 +90,39 @@ def get_schedule(year: int):
 
 def load_session(year, grand_prix, session_type):
     """Load FastF1 session with robust error handling."""
+    return _load_session_internal(year, grand_prix, session_type, telemetry=True, weather=True, messages=True)
+
+
+def _normalize_session_type(session_type: str) -> str:
+    """Normalize human-readable session names to FastF1 identifiers."""
+    st_map = {
+        'race': 'R', 'r': 'R',
+        'qualifying': 'Q', 'q': 'Q',
+        'fp1': 'FP1', 'fp2': 'FP2', 'fp3': 'FP3',
+        'practice 1': 'FP1', 'practice 2': 'FP2', 'practice 3': 'FP3',
+        'sprint': 'S', 's': 'S',
+        'sprint qualifying': 'SQ', 'sq': 'SQ',
+        'sprint shootout': 'SS', 'ss': 'SS'
+    }
+    return st_map.get(str(session_type).lower(), 'R')
+
+
+def _cache_key(year: int, grand_prix: str, session_type: str, telemetry: bool, weather: bool, messages: bool):
+    return (year, str(grand_prix).lower(), session_type, telemetry, weather, messages)
+
+
+def _load_session_internal(year, grand_prix, session_type, telemetry=True, weather=True, messages=True):
+    """Load and cache FastF1 session objects by payload profile."""
     if not validate_year(year):
         logger.warning(f"Invalid year: {year}")
         return None
-    
-    st_map = {
-        'race': 'R', 'r': 'R', 
-        'qualifying': 'Q', 'q': 'Q', 
-        'fp1': 'FP1', 'fp2': 'FP2', 'fp3': 'FP3', 
-        'sprint': 'S', 's': 'S',
-        'sprint qualifying': 'SQ', 'sq': 'SQ'
-    }
-    st = st_map.get(str(session_type).lower(), 'R')
+
+    st = _normalize_session_type(session_type)
+    cache_key = _cache_key(year, grand_prix, st, telemetry, weather, messages)
+    with _SESSION_CACHE_LOCK:
+        if cache_key in _SESSION_CACHE:
+            _SESSION_CACHE.move_to_end(cache_key)
+            return _SESSION_CACHE[cache_key]
     
     try:
         # Check connectivity before attempting load
@@ -105,8 +134,13 @@ def load_session(year, grand_prix, session_type):
             # Only proceed if we think we might have cache, otherwise warn user
             
         session = fastf1.get_session(year, grand_prix, st)
-        session.load(telemetry=True, weather=True, messages=True)
+        session.load(telemetry=telemetry, weather=weather, messages=messages)
         logger.info(f"Loaded session: {year} {grand_prix} {st}")
+
+        with _SESSION_CACHE_LOCK:
+            if len(_SESSION_CACHE) >= _SESSION_CACHE_LIMIT:
+                _SESSION_CACHE.popitem(last=False)
+            _SESSION_CACHE[cache_key] = session
         return session
 
     except Exception as e:
@@ -116,6 +150,124 @@ def load_session(year, grand_prix, session_type):
         else:
             logger.error(f"Session load error: {e}")
         return None
+
+
+def get_event_details(year: int, grand_prix: Optional[str] = None, round_number: Optional[int] = None) -> str:
+    """FastF1 event metadata lookup using get_event/get_event_schedule APIs."""
+    if not validate_year(year):
+        return f"Year {year} is out of range."
+
+    try:
+        if grand_prix:
+            event = fastf1.get_event(year, grand_prix)
+        elif round_number:
+            event = fastf1.get_event(year, round_number)
+        else:
+            return "Provide either grand_prix or round_number."
+
+        output = f"--- Event Details: {event['EventName']} ({year}) ---\n"
+        output += f"Round: {event['RoundNumber']}\n"
+        output += f"Country: {event['Country']} | Location: {event['Location']}\n"
+        output += f"Format: {event['EventFormat']}\n"
+
+        for label, key in [
+            ("FP1", "Session1"), ("FP2", "Session2"), ("FP3", "Session3"),
+            ("Qualifying", "Session4"), ("Race/Sprint", "Session5")
+        ]:
+            session_name = event.get(key)
+            session_date = event.get(f"{key}Date")
+            if session_name and pd.notna(session_date):
+                output += f"{label}: {session_name} @ {session_date}\n"
+        return output
+    except Exception as e:
+        logger.error(f"Event lookup error: {e}")
+        return f"Event lookup error: {e}"
+
+
+def get_testing_schedule(year: int) -> str:
+    """Get pre-season testing events via FastF1 get_testing_event_schedule."""
+    if not validate_year(year):
+        return f"Year {year} is out of range."
+
+    try:
+        schedule = fastf1.get_testing_event_schedule(year)
+        if schedule.empty:
+            return f"No testing events found for {year}."
+
+        output = f"--- {year} Testing Schedule ---\n"
+        for _, row in schedule.iterrows():
+            output += f"{row['EventName']} ({row['Location']}) - {row['EventDate'].strftime('%Y-%m-%d')}\n"
+        return output
+    except Exception as e:
+        logger.error(f"Testing schedule error: {e}")
+        return f"Testing schedule error: {e}"
+
+
+def get_next_event(year: int = None) -> str:
+    """Get next remaining event in a season via FastF1 get_events_remaining."""
+    year = year or pd.Timestamp.utcnow().year
+    if not validate_year(year):
+        return f"Year {year} is out of range."
+
+    try:
+        remaining = fastf1.get_events_remaining(year)
+        if remaining.empty:
+            return f"No remaining events found for {year}."
+
+        next_event = remaining.iloc[0]
+        return (
+            f"Next event: {next_event['EventName']} (Round {next_event['RoundNumber']})\n"
+            f"Location: {next_event['Location']}, {next_event['Country']}\n"
+            f"Date: {next_event['EventDate'].strftime('%Y-%m-%d')}"
+        )
+    except Exception as e:
+        logger.error(f"Next event lookup error: {e}")
+        return f"Next event lookup error: {e}"
+
+
+def get_session_status_summary(year: int, grand_prix: str, session: str = "Race") -> str:
+    """Summarize session_status, track_status, race control and weather data from FastF1 session APIs."""
+    session_obj = _load_session_internal(year, grand_prix, session, telemetry=False, weather=True, messages=True)
+    if not session_obj:
+        return "Session not found or failed to load."
+
+    try:
+        out = [f"--- Session Control Summary: {grand_prix} {year} ({session}) ---"]
+
+        track_status = getattr(session_obj, 'track_status', pd.DataFrame())
+        if isinstance(track_status, pd.DataFrame) and not track_status.empty:
+            out.append(f"Track status samples: {len(track_status)}")
+            out.append("Latest track statuses:")
+            for _, row in track_status.tail(5).iterrows():
+                out.append(f"- {row.get('Time', 'n/a')}: {row.get('Message', row.get('Status', 'n/a'))}")
+
+        session_status = getattr(session_obj, 'session_status', pd.DataFrame())
+        if isinstance(session_status, pd.DataFrame) and not session_status.empty:
+            out.append("Latest session statuses:")
+            for _, row in session_status.tail(3).iterrows():
+                out.append(f"- {row.get('Time', 'n/a')}: {row.get('Status', 'n/a')}")
+
+        race_control = getattr(session_obj, 'race_control_messages', pd.DataFrame())
+        if isinstance(race_control, pd.DataFrame) and not race_control.empty:
+            out.append("Recent race control messages:")
+            for _, row in race_control.tail(5).iterrows():
+                msg = row.get('Message', 'n/a')
+                category = row.get('Category', 'INFO')
+                out.append(f"- [{category}] {msg}")
+
+        weather = getattr(session_obj, 'weather_data', pd.DataFrame())
+        if isinstance(weather, pd.DataFrame) and not weather.empty:
+            latest = weather.iloc[-1]
+            out.append(
+                "Latest weather: "
+                f"air={latest.get('AirTemp', 'n/a')}°C, track={latest.get('TrackTemp', 'n/a')}°C, "
+                f"humidity={latest.get('Humidity', 'n/a')}%, rain={latest.get('Rainfall', 'n/a')}"
+            )
+
+        return "\n".join(out)
+    except Exception as e:
+        logger.error(f"Session status summary error: {e}")
+        return f"Session status summary error: {e}"
 
 def get_session_results(year: int, grand_prix: str, session: str):
     """Full classification table for a session."""

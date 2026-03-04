@@ -25,7 +25,7 @@ PDF_URLS = {
     "Financial_Regs_2026.pdf": "https://www.fia.com/system/files/documents/fia_2026_f1_regulations_-_section_d_financial_regulations_-_f1_teams_iss_04_-_2025-12-10_0.pdf",
     
     # 4. Engine Design (PU Technical)
-    "PU_Technical_Regs_2026.pdf": " https://www.fia.com/sites/default/files/fia_2026_formula_1_technical_regulations_pu_-_issue_6_-_2024-03-29.pdf",
+    "PU_Technical_Regs_2026.pdf": "https://www.fia.com/sites/default/files/fia_2026_formula_1_technical_regulations_pu_-_issue_6_-_2024-03-29.pdf",
     
     # 5. Engine Usage Rules (PU Sporting)
     "PU_Sporting_Regs_2026.pdf": "https://api.fia.com/sites/default/files/fia_2026_formula_1_sporting_regulations_pu_-_issue_5_-_2024-03-29_0.pdf",

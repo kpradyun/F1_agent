@@ -69,8 +69,8 @@ python main.py
 
 The agent utilizes a suite of **28 specialized tools** categorized by function:
 
-* **Reference Tools:** Access to world champions, season winners, fastest lap records, and team championships.
-* **Analysis Tools:** Schedule tracking, telemetry plotting, and tire strategy analysis.
+* **Reference Tools:** Access to world champions, season winners, fastest lap records, team championships, and Tavily-powered web/news lookups.
+* **Analysis Tools:** Schedule/event metadata, next-race lookup, session control feeds (track/race control/weather), telemetry plotting, and tire strategy analysis.
 * **Live Tools:** Real-time weather monitoring, track position maps, and timing intervals.
 * **Advanced Tools:** In-depth pit stop analysis, radio logs, and car-specific telemetry.
 * **Predictive & Visual:** Tire life degradation models and interactive race animations.
@@ -78,6 +78,11 @@ The agent utilizes a suite of **28 specialized tools** categorized by function:
 
 
 ---
+
+
+## Testing
+
+For a practical smoke-test workflow, see `docs/TESTING.md`.
 
 ## Configuration
 
