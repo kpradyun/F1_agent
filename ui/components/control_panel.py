@@ -4,7 +4,7 @@ Playback control buttons (play/pause, speed, restart)
 """
 import arcade
 from ui.helpers import create_rect
-from config.ui_settings import UI_TEXT_PRIMARY, UI_ACCENT_COLOR
+from config.ui_settings import UI_TEXT_PRIMARY, UI_ACCENT_COLOR, PLAYBACK_SPEEDS
 
 class ControlPanel:
     """Control panel with playback buttons"""
@@ -37,6 +37,12 @@ class ControlPanel:
             elif btn['key'] == 'restart':
                 color = (100, 30, 30)
                 border = UI_ACCENT_COLOR
+            elif btn['key'] == 'slower' and speed <= min(PLAYBACK_SPEEDS):
+                color = (45, 60, 90)
+                border = (120, 170, 255)
+            elif btn['key'] == 'faster' and speed >= max(PLAYBACK_SPEEDS):
+                color = (45, 60, 90)
+                border = (120, 170, 255)
             else:
                 color = (30, 30, 40)
                 border = (100, 100, 120)
@@ -59,6 +65,12 @@ class ControlPanel:
             f"Speed: {speed:.2f}x", self.x + 520, self.y + self.button_height/2, 
             UI_TEXT_PRIMARY, 12, 
             anchor_x="left", anchor_y="center", bold=True
+        )
+        arcade.draw_text(
+            "Hotkeys: SPACE play/pause | ←/→ seek | +/- speed",
+            self.x + 520, self.y + self.button_height/2 - 16,
+            (170, 170, 185), 10,
+            anchor_x="left", anchor_y="center"
         )
     
     def get_clicked_button(self, x, y):

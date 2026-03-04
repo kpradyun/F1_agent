@@ -7,8 +7,13 @@ from langchain_core.tools import tool
 from config.settings import DATA_DEFAULT_YEAR, MIN_REPLAY_YEAR
 from core.fastf1_adapter import (
     get_schedule,
+    get_event_details,
+    get_testing_schedule,
+    get_next_event,
     get_session_results,
+    get_session_status_summary,
     plot_driver_comparison,
+    analyze_telemetry,
     get_tire_strategy_gantt,
     get_tire_strategy_analysis,
     calculate_championship_standings
@@ -55,31 +60,102 @@ async def f1_session_results(
 
 
 @tool
-async def f1_telemetry_plot(
-    driver1: str,
-    driver2: str,
+async def f1_event_details(
+    grand_prix: str = "",
+    year: int = DATA_DEFAULT_YEAR,
+    round_number: int = 0
+) -> str:
+    """
+    Event metadata using FastF1 event APIs (get_event/get_event_schedule).
+    Use when user asks about event format, venue details, or session dates.
+    """
+    try:
+        wrapper = get_async_wrapper()
+        return await wrapper.run_sync_tool(
+            get_event_details,
+            year,
+            grand_prix if grand_prix else None,
+            round_number if round_number > 0 else None
+        )
+    except Exception as e:
+        logger.error(f"Event details fetch failed: {e}")
+        return f"Failed to fetch event details: {e}"
+
+
+@tool
+async def f1_testing_schedule(year: int = DATA_DEFAULT_YEAR) -> str:
+    """
+    Pre-season testing schedule from FastF1 get_testing_event_schedule API.
+    """
+    try:
+        wrapper = get_async_wrapper()
+        return await wrapper.run_sync_tool(get_testing_schedule, year)
+    except Exception as e:
+        logger.error(f"Testing schedule fetch failed: {e}")
+        return f"Failed to fetch testing schedule: {e}"
+
+
+@tool
+async def f1_next_event(year: int = DATA_DEFAULT_YEAR) -> str:
+    """
+    Next remaining event using FastF1 get_events_remaining API.
+    """
+    try:
+        wrapper = get_async_wrapper()
+        return await wrapper.run_sync_tool(get_next_event, year)
+    except Exception as e:
+        logger.error(f"Next event fetch failed: {e}")
+        return f"Failed to fetch next event: {e}"
+
+
+@tool
+async def f1_session_control_summary(
     grand_prix: str,
     year: int = DATA_DEFAULT_YEAR,
     session: str = "Race"
 ) -> str:
     """
-    NEW: Enhanced with Delta Trace.
-    Creates speed comparison + time delta plot between two drivers.
-    Use when user asks to: compare drivers, telemetry, speed trace, lap analysis.
-    Shows where time was gained/lost over the lap distance.
-    Session types: 'Race', 'Qualifying', 'Sprint', 'Sprint Qualifying'
+    Session control/ops feed from FastF1 APIs: track status, session status,
+    race control messages and weather snapshot.
     """
     try:
         wrapper = get_async_wrapper()
+        return await wrapper.run_sync_tool(get_session_status_summary, year, grand_prix, session)
+    except Exception as e:
+        logger.error(f"Session control summary failed: {e}")
+        return f"Session control summary failed: {e}"
+
+
+@tool
+async def f1_telemetry_plot(
+    driver1: str,
+    grand_prix: str,
+    driver2: str = "",
+    year: int = DATA_DEFAULT_YEAR,
+    session: str = "Race"
+) -> str:
+    """
+    Telemetry tool that works for one or two drivers.
+
+    - If one driver is provided, returns detailed telemetry breakdown.
+    - If two drivers are provided, creates speed comparison + time delta plot.
+    """
+    try:
+        wrapper = get_async_wrapper()
+
+        if not driver2:
+            return await wrapper.run_sync_tool(
+                analyze_telemetry, driver1, year, grand_prix, session
+            )
+
         result = await wrapper.run_sync_tool(
             plot_driver_comparison, driver1, driver2, year, grand_prix, session
         )
-        
+
         if result.startswith("plots/"):
             return f"Telemetry comparison saved: {result}"
-        else:
-            return result
-            
+        return result
+
     except Exception as e:
         logger.error(f"Telemetry plot failed: {e}")
         return f"Telemetry plot error: {e}"
@@ -212,7 +288,11 @@ def get_analysis_tools() -> list:
     """
     return [
         f1_schedule,
+        f1_next_event,
+        f1_event_details,
+        f1_testing_schedule,
         f1_session_results,
+        f1_session_control_summary,
         f1_telemetry_plot,
         f1_tire_strategy,
         f1_championship_calculator,

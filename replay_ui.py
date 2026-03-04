@@ -299,14 +299,24 @@ class F1ReplayWindow(arcade.Window):
             self.paused = True
             self.update_frame_data()
         elif key == arcade.key.RIGHT:
-            self.current_time += timedelta(seconds=10)
+            self.current_time = min(self.total_time, self.current_time + timedelta(seconds=10))
             self.update_frame_data()
         elif key == arcade.key.LEFT:
             self.current_time = max(self.min_time, self.current_time - timedelta(seconds=10))
             self.update_frame_data()
+        elif key in (arcade.key.PLUS, arcade.key.NUM_ADD, arcade.key.EQUAL):
+            self.speed_index = min(len(PLAYBACK_SPEEDS) - 1, self.speed_index + 1)
+            self.playback_speed = PLAYBACK_SPEEDS[self.speed_index]
+        elif key in (arcade.key.MINUS, arcade.key.NUM_SUBTRACT):
+            self.speed_index = max(0, self.speed_index - 1)
+            self.playback_speed = PLAYBACK_SPEEDS[self.speed_index]
 
     def on_mouse_press(self, x, y, button, modifiers):
         """Handle mouse clicks"""
+        if self.progress.contains(x, y):
+            self.current_time = max(self.min_time, min(self.total_time, self.progress.time_from_x(x)))
+            self.update_frame_data()
+            return
         btn_key = self.controls.get_clicked_button(x, y)
         if btn_key:
             if btn_key == 'play_pause':
@@ -316,7 +326,7 @@ class F1ReplayWindow(arcade.Window):
                 self.paused = True
                 self.update_frame_data()
             elif btn_key == 'forward':
-                self.current_time += timedelta(seconds=30)
+                self.current_time = min(self.total_time, self.current_time + timedelta(seconds=30))
                 self.update_frame_data()
             elif btn_key == 'rewind':
                 self.current_time = max(self.min_time, self.current_time - timedelta(seconds=30))

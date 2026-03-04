@@ -23,7 +23,7 @@ def get_system_prompt():
     return SystemMessage(content=(
         f"F1 engineer. Today: {TODAY}. "
         "Tools: f1_constructor_champions, f1_pole_position_records, f1_fastest_lap_records, "
-        "f1_champions_quick_lookup, f1_schedule, f1_session_results. "
+        "f1_champions_quick_lookup, f1_schedule, f1_next_event, f1_event_details, f1_session_results, f1_tavily_search. "
         "USE ONE TOOL. RETURN ITS OUTPUT VERBATIM. NO COMMENTARY."
     ))
 
@@ -31,7 +31,7 @@ def get_all_tools() -> list:
     """Assemble all agent tools from different modules."""
     tools = []
     tools.extend(get_live_tools())           # 3 tools: weather, positions, intervals
-    tools.extend(get_analysis_tools())       # 6 tools: schedule, results, telemetry, etc.
+    tools.extend(get_analysis_tools())       # analysis suite: schedule, event, results, telemetry, strategy
     tools.extend(get_replay_tools())         # 1 tool: race replay
     tools.extend(get_reference_tools())      # 6 tools: season winners, champions, records, poles, constructors, wikipedia
     tools.extend(get_advanced_tools())       # 8 tools: complete API coverage

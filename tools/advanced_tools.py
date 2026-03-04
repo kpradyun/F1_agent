@@ -4,6 +4,7 @@ Leveraging ALL OpenF1 endpoints for maximum functionality
 """
 import logging
 import asyncio
+import os
 from typing import List, Dict, Optional
 from langchain_core.tools import tool
 from core.api_client import get_enhanced_client
@@ -11,6 +12,7 @@ from config.settings import DATA_DEFAULT_YEAR, PLOTS_DIR
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import requests
 
 logger = logging.getLogger("AdvancedTools")
 
@@ -451,6 +453,87 @@ async def f1_team_radio_log(
         return f"Failed to get team radio: {e}"
 
 
+
+
+@tool
+async def f1_team_radio_download(
+    session_key: str = "latest",
+    driver_number: Optional[int] = None,
+    limit: int = 10
+) -> str:
+    """
+    Download team radio audio files locally from OpenF1 recording URLs.
+
+    Use when user explicitly asks to download/save radio logs/audio.
+
+    Args:
+        session_key: Session identifier (default: latest)
+        driver_number: Optional driver filter
+        limit: Max number of clips to download (default: 10)
+
+    Returns:
+        Download summary with local file paths.
+    """
+    try:
+        client = get_enhanced_client()
+
+        if session_key == "latest":
+            session_key = await client.get_latest_session_key_async()
+
+        radio = await client.get_team_radio_async(session_key, driver_number)
+        if not radio:
+            return "No team radio data available to download."
+
+        df = pd.DataFrame(radio).sort_values('date')
+        if limit and limit > 0:
+            df = df.tail(limit)
+
+        out_dir = os.path.join(PLOTS_DIR, "team_radio")
+        os.makedirs(out_dir, exist_ok=True)
+
+        downloaded = []
+        failed = 0
+
+        for _, msg in df.iterrows():
+            url = msg.get('recording_url')
+            if not url:
+                failed += 1
+                continue
+
+            driver = int(msg.get('driver_number', 0))
+            date_raw = str(msg.get('date', 'unknown'))
+            safe_ts = date_raw.replace(':', '-').replace('T', '_').replace('Z', '')[:19]
+            filename = f"session_{session_key}_drv_{driver}_{safe_ts}.mp3"
+            path = os.path.join(out_dir, filename)
+
+            try:
+                resp = requests.get(url, timeout=30)
+                resp.raise_for_status()
+                with open(path, 'wb') as f:
+                    f.write(resp.content)
+                downloaded.append(path)
+            except Exception:
+                failed += 1
+
+        if not downloaded:
+            return f"Failed to download radio clips. Failed attempts: {failed}."
+
+        output = "=== TEAM RADIO DOWNLOAD COMPLETE ===\n\n"
+        output += f"Session: {session_key}\n"
+        if driver_number:
+            output += f"Driver: #{driver_number}\n"
+        output += f"Downloaded: {len(downloaded)}\n"
+        output += f"Failed: {failed}\n\n"
+        output += "Files:\n"
+        for pth in downloaded:
+            output += f"- {pth}\n"
+        return output
+
+    except Exception as e:
+        logger.error(f"Team radio download failed: {e}")
+        return f"Failed to download team radio: {e}"
+
+
 @tool
 async def f1_lap_analysis(
     session_key: str = "latest",
@@ -536,5 +619,6 @@ def get_advanced_tools() -> List:
         f1_position_changes,
         f1_stint_analysis,
         f1_team_radio_log,
+        f1_team_radio_download,
         f1_lap_analysis
     ]
