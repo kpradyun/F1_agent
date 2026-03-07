@@ -54,7 +54,7 @@ F1_agent/
 ### Setup
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/F1_agent.git
+git clone https://github.com/kpradyun/F1_agent.git
 cd F1_agent
 
 # Create and activate virtual environment
