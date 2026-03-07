@@ -4,6 +4,7 @@
 [![FastF1](https://img.shields.io/badge/FastF1-enabled-red.svg)](https://github.com/theOehrly/Fast-F1)
 [![LangChain](https://img.shields.io/badge/LangChain-powered-green.svg)](https://www.langchain.com/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black) 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 An intelligent Formula 1 data analysis agent powered by LangChain, FastF1, OpenF1 API, and LLM technology. This system provides real-time telemetry, historical record lookups, interactive race visualizations, and a RAG engine for FIA regulations.
 
