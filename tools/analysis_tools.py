@@ -123,10 +123,9 @@ async def f1_championship_calculator(
     year: int = DATA_DEFAULT_YEAR
 ) -> str:
     """
-    Championship Standings Calculator.
+    Championship Standings Calculator for COMPLETED races.
     Projects updated Driver and Constructor standings after a specific race.
-    Shows current points, position changes, and championship implications.
-    Use when user asks about: championship standings, points, who's leading, title fight.
+    Use ONLY when the race is finished.
     """
     try:
         wrapper = get_async_wrapper()

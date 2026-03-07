@@ -65,7 +65,7 @@ source .venv/bin/activate  # Linux/macOS
 pip install -r requirements.txt
 
 # Pull the required LLM
-ollama pull qwen2.5:7b
+ollama pull llama3.2:latest 
 
 # Run the agent
 python main.py

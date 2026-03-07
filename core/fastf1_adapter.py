@@ -12,12 +12,14 @@ from datetime import timedelta
 
 logger = logging.getLogger("F1_Data_Miner")
 
-if not os.path.exists('cache'):
-    os.makedirs('cache')
+# Resolve absolute path for cache to ensure consistency across execution contexts
+CACHE_DIR = os.path.abspath('cache')
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
 if not os.path.exists('plots'):
     os.makedirs('plots')
 
-fastf1.Cache.enable_cache('cache')
+fastf1.Cache.enable_cache(CACHE_DIR)
 fastf1.plotting.setup_mpl()
 
 def validate_year(year: int) -> bool:
@@ -95,13 +97,50 @@ def load_session(year, grand_prix, session_type):
     try:
         # Check connectivity before attempting load
         import socket
+        # Cleaning logic for LLM hallucinations like "/sessions latest" or "GP: Melbourne"
+        def clean_arg(arg: str) -> str:
+            if not arg: return arg
+            arg = str(arg).strip()
+            # Remove common prefixes from small LLMs
+            for prefix in ['/sessions', 'GP:', 'Session:', 'Event:']:
+                if arg.startswith(prefix):
+                    arg = arg[len(prefix):].strip()
+            return arg
+
+        grand_prix = clean_arg(grand_prix)
+        session_type = clean_arg(session_type)
+        
+        gp_clean = grand_prix.lower()
+        st = session_type
+        
+        # Comprehensive mapping for all session types
+        def map_session(s: str) -> str:
+            s = str(s).upper()
+            if 'QUALIFYING' in s or s == 'Q': return 'Q'
+            if 'RACE' in s or s == 'R': return 'R'
+            if 'SPRINT' in s and 'QUALIFYING' in s: return 'SQ'
+            if 'SPRINT' in s and 'SHOOTOUT' in s: return 'SQ'
+            if 'SPRINT' in s: return 'S'
+            if 'FP1' in s or ('FREE' in s and 'PRACTICE' in s and '1' in s): return 'FP1'
+            if 'FP2' in s or ('FREE' in s and 'PRACTICE' in s and '2' in s): return 'FP2'
+            if 'FP3' in s or ('FREE' in s and 'PRACTICE' in s and '3' in s): return 'FP3'
+            if 'P1' in s: return 'FP1'
+            if 'P2' in s: return 'FP2'
+            if 'P3' in s: return 'FP3'
+            return s # Fallback to original
+
+        st = map_session(st)
+        
+        logger.info(f"load_session called for {year} '{grand_prix}' ({session_type})")
+        
+        # Test for internet
         try:
             socket.create_connection(("1.1.1.1", 53), timeout=3)
         except OSError:
             logger.error("OFFLINE MODE DETECTED: Cannot fetch new race data.")
             # Only proceed if we think we might have cache, otherwise warn user
             
-        is_testing = "test" in grand_prix.lower() or "pre-season" in grand_prix.lower()
+        is_testing = "test" in gp_clean or "pre-season" in gp_clean
         if is_testing:
             # FastF1 uses get_testing_session since v3.0 for testing sessions
             test_day = 1
@@ -110,11 +149,56 @@ def load_session(year, grand_prix, session_type):
             
             session = fastf1.get_testing_session(year, 1, test_day)
         else:
-            event = fastf1.get_event(year, grand_prix)
+            # Resolve "today" or "latest" to actual event name
+            if gp_clean in ['today', 'latest', 'current']:
+                try:
+                    from config.settings import TODAY
+                    from core.api_client import get_client
+                    client = get_client()
+                    
+                    # Try OpenF1 first for "today" (most accurate for live events)
+                    logger.info(f"Querying OpenF1 for today's sessions ({TODAY})...")
+                    today_sessions = client.get_sessions_by_date(TODAY)
+                    
+                    if today_sessions:
+                        # Pick the latest session of the day
+                        latest_today = today_sessions[-1]
+                        location = latest_today.get('location', '')
+                        # Map common locations to full GP names if needed
+                        if 'Melbourne' in location or 'Albert Park' in location:
+                            grand_prix = "Australian Grand Prix"
+                        else:
+                            grand_prix = f"{location} Grand Prix"
+                        
+                        logger.info(f"OpenF1 resolved '{grand_prix}' from location '{location}'")
+                    else:
+                        # Fallback to schedule logic
+                        now = datetime.datetime.fromisoformat(TODAY)
+                        schedule = fastf1.get_event_schedule(year)
+                        # Find the closest event (within 4 days)
+                        diffs = (schedule['EventDate'] - now).abs()
+                        closest_idx = diffs.idxmin()
+                        grand_prix = schedule.loc[closest_idx, 'EventName']
+                        logger.info(f"Schedule resolved '{grand_prix}' as closest to {TODAY}")
+                except Exception as e:
+                    logger.warning(f"Resolution failed: {e}. Using raw '{grand_prix}'")
+
             session = fastf1.get_session(year, grand_prix, st)
             
-        session.load(telemetry=True, weather=True, messages=True)
-        logger.info(f"Loaded session: {year} {grand_prix} {st}")
+        try:
+            # For results, we don't ALWAYS need telemetry.
+            # But we keep it True by default here for other tools. 
+            # We'll override in get_session_results.
+            session.load(telemetry=True, weather=True, messages=True)
+            logger.info(f"Loaded session: {year} {grand_prix} {st}")
+        except Exception as e:
+            logger.warning(f"Full load failed for {grand_prix}: {e}. Trying minimal load...")
+            try:
+                session.load(telemetry=False, weather=False, messages=False)
+                logger.info(f"Minimal load successful for {grand_prix} {st}")
+            except Exception as e2:
+                logger.error(f"Minimal load also failed for {grand_prix} {st}: {e2}")
+                # Don't return None yet, the tools might still access partial data or we handle it there
         return session
 
     except Exception as e:
@@ -134,28 +218,133 @@ def get_session_results(year: int, grand_prix: str, session: str):
     try:
         # Ensure numerical sorting for positions
         import pandas as pd
-        res = session_obj.results.copy()
-        res['SortingPos'] = pd.to_numeric(res['ClassifiedPosition'], errors='coerce')
-        res = res.sort_values(by='SortingPos', na_position='last')
-        output = f"### 🏎️ Race Classification: {grand_prix} {year} ({session})\n\n"
+        
+        # Safely access results/laps properties to avoid SessionNotLoadedError crash
+        res = pd.DataFrame()
+        laps = pd.DataFrame()
+        
+        try:
+            res = session_obj.results.copy()
+        except Exception as e:
+            logger.info(f"Results table unavailable: {e}")
+            
+        try:
+            laps = session_obj.laps.copy()
+        except Exception as e:
+            logger.info(f"Lap data unavailable: {e}")
+        
+        is_provisional = False
+        # Fallback to laps if results table is empty or for Practice/Qualifying
+        st_clean = str(session).upper()
+        is_practice = 'P' in st_clean or 'FP' in st_clean or 'PRACTICE' in st_clean
+        is_qualifying = 'Q' in st_clean or 'QUALIFYING' in st_clean or 'SQ' in st_clean
+        
+        if (res.empty or is_practice or is_qualifying) and not laps.empty:
+            logger.info(f"Using lap data to calculate standings for {session}")
+            is_provisional = True
+            provisional = []
+            
+            # Sort drivers by their BEST lap time for Practice/Qualifying
+            # For Race, we use the last lap position (already implemented)
+            drivers_stats = []
+            # Get all drivers registered for the session to ensure DNS/DNF are included
+            session_drivers = []
+            try:
+                session_drivers = session_obj.drivers
+            except:
+                session_drivers = laps['Driver'].unique() if not laps.empty else []
+
+            for driver in session_drivers:
+                # Use DriverNumber for consistent comparison (both should be strings)
+                d_laps = laps[laps['DriverNumber'] == str(driver)].copy() if not laps.empty else pd.DataFrame()
+                
+                if is_practice or is_qualifying:
+                    # Best lap time
+                    best_lap = d_laps['LapTime'].min() if not d_laps.empty else None
+                    drivers_stats.append((driver, best_lap))
+                else:
+                    # Last position in race
+                    last_pos = d_laps.iloc[-1].get('Position', 99) if not d_laps.empty else 999
+                    drivers_stats.append((driver, last_pos))
+            
+            # Sort: for times, smaller is better (asc); for pos, smaller is better (asc)
+            def sort_key(x):
+                val = x[1]
+                if pd.isna(val) or val is None:
+                    return pd.Timedelta(hours=24) if is_practice or is_qualifying else 999
+                return val
+            
+            drivers_stats.sort(key=sort_key)
+            
+            for i, (driver, val) in enumerate(drivers_stats, 1):
+                try:
+                    d_info = session_obj.get_driver(driver)
+                    status = 'Finished'
+                    if pd.isna(val) or val is None:
+                        status = 'DNS' # Default for sessions without laps
+                    
+                    provisional.append({
+                        'ClassifiedPosition': str(i),
+                        'FullName': d_info['FullName'],
+                        'TeamName': d_info['TeamName'],
+                        'Points': 0,
+                        'Status': status
+                    })
+                except: continue
+                
+            res = pd.DataFrame(provisional)
+
+        if not res.empty:
+            res['SortingPos'] = pd.to_numeric(res['ClassifiedPosition'], errors='coerce')
+            res = res.sort_values(by='SortingPos', na_position='last')
+        
+        # Use formal event name from session object if available
+        event_name = getattr(session_obj.event, 'EventName', grand_prix)
+        output = f"### Race Classification: {event_name} {year} ({session})\n\n"
         output += "| Pos | Driver | Team | Points | Status |\n"
         output += "| :--- | :--- | :--- | :--- | :--- |\n"
         
-        for _, row in res.iterrows():
-            pos = str(row['ClassifiedPosition']).strip()
-            if pos == 'R': pos = "DNF"
-            elif pos == 'D': pos = "DSQ"
-            elif pos == 'W': pos = "WDC"
-            elif pos == 'nan' or pos == 'F': pos = "DNS"
-            
-            fullname = row.get('FullName', 'Unknown')
-            team = row.get('TeamName', 'Unknown')
-            points = int(row.get('Points', 0))
-            status = row.get('Status', 'Finished')
-            
-            output += f"| {pos} | {fullname} | {team} | **{points}** | {status} |\n"
+        if not res.empty:
+            for _, row in res.iterrows():
+                # Get position safely
+                pos_val = row.get('ClassifiedPosition', '')
+                pos = str(pos_val).strip()
+                
+                # Check for special FastF1/OpenF1 status codes
+                if pos in ['R', '11.0']: 
+                    pos = "DNF"
+                elif pos == 'D': pos = "DSQ"
+                elif pos == 'W': pos = "WDC"
+                elif pos in ['nan', 'None', '', 'F']: 
+                    pos = "-" # Use dash for unknown but present
+                # FastF1 often provides '1.0', '2.0' etc. Clean up to '1', '2'
+                elif pos.replace('.0', '').isdigit():
+                    pos = pos.replace('.0', '')
+                elif pos in ['0', '0.0']:
+                    pos = "DNS" # Actually, 0 in F1 usually means DNS/NQ
+                else:
+                    pos = "-" # Fallback
+                
+                fullname = row.get('FullName', 'Unknown')
+                team = row.get('TeamName', 'Unknown')
+                points_val = row.get('Points', 0)
+                try:
+                    points = int(float(points_val)) if pd.notnull(points_val) else 0
+                except:
+                    points = 0
+                status = row.get('Status', 'Finished')
+                
+                output += f"| {pos} | {fullname} | {team} | **{points}** | {status} |\n"
             
         output += "\n[CRITICAL NOTE FOR AGENT: DO NOT SUMMARIZE THE TABLE ABOVE. RETURN IT VERBATIM WITH ALL COLUMNS.]"
+        if res.empty:
+            if laps.empty:
+                output += "\n\nNOTE: Could not load any data for this session. This may be due to a network issue, missing data on the server, or the session hasn't happened yet."
+            else:
+                output += "\n\nNOTE: Official results are not yet available for this session. Please check back later or use live timing tools."
+        elif is_provisional: 
+             output += "\n\nNOTE: These are provisional results calculated from lap data as official standings are not yet published."
+
         return output
     except Exception as e:
         logger.error(f"Results error: {e}")

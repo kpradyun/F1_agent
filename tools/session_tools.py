@@ -34,9 +34,10 @@ async def f1_testing_summary(year: int, test_number: int = 1, day: int = 1) -> s
 @tool
 async def f1_weather_report(grand_prix: str, year: int = DATA_DEFAULT_YEAR, session: str = "Race") -> str:
     """
-    Provides a detailed weather report for a specific F1 session.
+    Provides a detailed weather report for a COMPLETED F1 session.
     Includes air/track temperatures, humidity, and rainfall status/trends.
-    Use when user asks about: weather, track temperature, did it rain, was it hot.
+    Use ONLY for historical analysis or when session is finished.
+    Do NOT use for "live", "now", or "current" weather (use f1_live_weather instead).
     """
     try:
         wrapper = get_async_wrapper()
@@ -48,9 +49,9 @@ async def f1_weather_report(grand_prix: str, year: int = DATA_DEFAULT_YEAR, sess
 @tool
 async def f1_race_control_report(grand_prix: str, year: int = DATA_DEFAULT_YEAR, session: str = "Race") -> str:
     """
-    Lists all official race control messages from a session.
+    Lists all official race control messages from a COMPLETED session.
     Includes Safety Cars, VSC, Red Flags, Investigations, and Penalties.
-    Use when user asks about: what happened in the race, safety car, penalties, race control.
+    Use ONLY for historical analysis or when session is finished.
     """
     try:
         wrapper = get_async_wrapper()

@@ -1048,12 +1048,61 @@ async def f1_constructor_career_summary(constructor_query: str) -> str:
         return f"Error: {e}"
 
 
+@tool
+async def f1_standings(year: int = 2026) -> str:
+    """
+    Returns the CURRENT F1 World Championship standings for drivers and constructors.
+    Use when user asks for: "current standings", "championship points", "who is leading",
+    "driver standings", "team standings", "points table".
+    
+    Args:
+        year: The F1 season year (default: 2026)
+    """
+    try:
+        from utils.async_tools import get_async_wrapper
+        wrapper = get_async_wrapper()
+        
+        def fetch_standings():
+            # Get driver standings
+            d_standings = _get_cached_driver_standings(year)
+            # Get constructor standings
+            c_standings = _get_cached_constructor_standings(year)
+            
+            output = f"## 🏆 {year} F1 Championship Standings\n\n"
+            
+            if hasattr(d_standings, 'content') and d_standings.content:
+                df_d = d_standings.content[0]
+                output += "### 👤 Driver Standings\n\n"
+                # Select key columns
+                cols = ['position', 'points', 'wins', 'givenName', 'familyName', 'constructorName']
+                df_d_display = df_d.copy()
+                df_d_display['Driver'] = df_d_display['givenName'] + " " + df_d_display['familyName']
+                df_d_display = df_d_display[['position', 'points', 'wins', 'Driver', 'constructorName']]
+                df_d_display.columns = ['Pos', 'Pts', 'Wins', 'Driver', 'Team']
+                output += df_d_display.head(20).to_markdown(index=False) + "\n\n"
+            
+            if hasattr(c_standings, 'content') and c_standings.content:
+                df_c = c_standings.content[0]
+                output += "### 🏎️ Constructor Standings\n\n"
+                df_c_display = df_c[['position', 'points', 'wins', 'name']]
+                df_c_display.columns = ['Pos', 'Pts', 'Wins', 'Team']
+                output += df_c_display.to_markdown(index=False) + "\n"
+                
+            return output
+
+        return await wrapper.run_sync_tool(fetch_standings)
+    except Exception as e:
+        logger.error(f"Standings fetch failed: {e}")
+        return f"Error fetching standings: {e}"
+
+
 def get_reference_tools() -> list:
     """
     Returns a list of all historical reference and lookup tools.
     Includes the enhanced Ergast-based dynamic tools.
     """
     return [
+        f1_standings,
         f1_champions_quick_lookup,
         f1_season_race_winners,
         f1_driver_career_summary,
@@ -1063,5 +1112,48 @@ def get_reference_tools() -> list:
         f1_circuit_guide,
         f1_reliability_analysis,
         f1_head_to_head,
-        f1_wikipedia_lookup
+        f1_wikipedia_lookup,
+        f1_diagnostics
     ]
+@tool
+async def f1_diagnostics() -> str:
+    """
+    Returns system diagnostic information, including FastF1 cache location, 
+    versions, and environment variables. Use this when the agent seems to fail 
+    to load data that should be available.
+    """
+    try:
+        import fastf1
+        import os
+        import platform
+        import sys
+        from config.settings import TODAY, DATA_DEFAULT_YEAR
+        
+        cache_dir = "Not configured"
+        try:
+            # Check where FastF1 thinks the cache is
+            # In older versions it's fastf1.Cache.cache_dir
+            # In newer ones it might be different, but let's check common spots
+            cache_dir = getattr(fastf1.Cache, 'cache_dir', 'Unknown (Old/New FastF1 version)')
+        except:
+            pass
+            
+        real_cache_path = os.path.abspath('cache')
+        cache_exists = os.path.exists(real_cache_path)
+        
+        diag = "### 🛠️ F1 Agent Diagnostics\n\n"
+        diag += f"- **Platform**: {platform.platform()}\n"
+        diag += f"- **Python**: {sys.version.split()[0]}\n"
+        diag += f"- **FastF1 Version**: {fastf1.__version__}\n"
+        diag += f"- **Current Directory**: {os.getcwd()}\n"
+        diag += f"- **Configured TODAY**: {TODAY}\n"
+        diag += f"- **Configured Cache Path (Resolved)**: {real_cache_path}\n"
+        diag += f"- **Cache Directory Exists**: {cache_exists}\n"
+        
+        if cache_exists:
+            years = [d for d in os.listdir(real_cache_path) if os.path.isdir(os.path.join(real_cache_path, d)) and d.isdigit()]
+            diag += f"- **Years in Cache**: {sorted(years)}\n"
+        
+        return diag
+    except Exception as e:
+        return f"Diagnostics failed: {e}"

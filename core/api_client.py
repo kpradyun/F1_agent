@@ -61,7 +61,19 @@ class OpenF1ClientEnhanced:
             'static': 3600   # Static data: 1 hour
         }
         
+        # Async session for aiohttp (lazy initialized)
+        self._async_session: Optional[aiohttp.ClientSession] = None
+        
         logger.info("Enhanced API client initialized with connection pooling")
+    
+    async def _get_async_session(self) -> aiohttp.ClientSession:
+        """Get or create the async aiohttp session"""
+        if self._async_session is None or self._async_session.closed:
+            # Reduced limit to avoid 429 errors on public API
+            connector = aiohttp.TCPConnector(limit=5, ttl_dns_cache=300)
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            self._async_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        return self._async_session
     
     def _get_cache_key(self, endpoint: str, params: Optional[Dict] = None) -> str:
         """Generate cache key from endpoint and params"""
@@ -130,7 +142,24 @@ class OpenF1ClientEnhanced:
         
         # Make request using persistent session
         url = f"{self.base_url}/{endpoint}"
-        logger.debug(f"API Request: {url} | Params: {params}")
+        
+        # Handle OpenF1's non-standard parameter format (e.g., date>...)
+        # If any value starts with > or <, we must construct the query string manually
+        # to avoid URL encoding of these operators by requests.
+        query_string = ""
+        if params:
+            parts = []
+            for k, v in params.items():
+                v_str = str(v)
+                if v_str.startswith('>') or v_str.startswith('<'):
+                    parts.append(f"{k}{v_str}")
+                else:
+                    parts.append(f"{k}={v_str}")
+            query_string = "&".join(parts)
+            url = f"{url}?{query_string}"
+            params = None # Already handled in URL
+            
+        logger.debug(f"API Request: {url}")
         
         try:
             response = self.session.get(url, params=params, timeout=self.timeout)
@@ -165,9 +194,32 @@ class OpenF1ClientEnhanced:
         
         url = f"{self.base_url}/{endpoint}"
         
+        # Handle OpenF1's non-standard parameter format (e.g., date>...)
+        query_string = ""
+        if params:
+            parts = []
+            for k, v in params.items():
+                v_str = str(v)
+                if v_str.startswith('>') or v_str.startswith('<'):
+                    parts.append(f"{k}{v_str}")
+                else:
+                    parts.append(f"{k}={v_str}")
+            query_string = "&".join(parts)
+            url = f"{url}?{query_string}"
+            params = None # Already handled in URL
+            
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=self.timeout) as response:
+            session = await self._get_async_session()
+            
+            # Implementation simple retry for 429
+            for attempt in range(3):
+                async with session.get(url, params=params) as response:
+                    if response.status == 429:
+                        wait = (attempt + 1) * 2
+                        logger.warning(f"Rate limited (429). Waiting {wait}s...")
+                        await asyncio.sleep(wait)
+                        continue
+                        
                     response.raise_for_status()
                     data = await response.json()
                     
@@ -176,9 +228,13 @@ class OpenF1ClientEnhanced:
                         self._set_cached(cache_key, data)
                     
                     return data
+            
+            raise Exception("Max retries exceeded for rate limit (429)")
                     
         except Exception as e:
-            logger.error(f"Async API request failed: {e}")
+            logger.error(f"Async API request failed: {type(e).__name__}: {str(e)}")
+            if hasattr(e, 'status'):
+                logger.error(f"Response Status: {e.status}")
             raise
     
     # ========================================================================
@@ -189,6 +245,20 @@ class OpenF1ClientEnhanced:
         """Get sessions/meetings data"""
         return self._make_request("sessions", params=filters, cache_type='static')
     
+    def get_sessions_by_date(self, date_str: str) -> List[Dict]:
+        """
+        Get sessions for a specific date (YYYY-MM-DD).
+        Useful for resolving 'today' to a specific session key.
+        """
+        # OpenF1 supports date operators like >= or <
+        # We search for sessions starting today or ending today
+        start_filter = f">{date_str}T00:00:00"
+        end_filter = f"<{date_str}T23:59:59"
+        
+        # Use >= operator for date_start to include sessions starting today
+        start_filter = f">={date_str}T00:00:00"
+        return self.get_sessions(date_start=start_filter)
+    
     def get_weather(self, session_key: str) -> List[Dict]:
         """Get weather data"""
         return self._make_request(
@@ -197,18 +267,21 @@ class OpenF1ClientEnhanced:
             cache_type='live'
         )
     
-    def get_location(self, session_key: str, driver_number: Optional[int] = None) -> List[Dict]:
+    def get_location(self, session_key: str, driver_number: Optional[int] = None, **kwargs) -> List[Dict]:
         """Get location/position data"""
         params = {"session_key": session_key}
         if driver_number:
             params["driver_number"] = driver_number
+        params.update(kwargs)
         return self._make_request("location", params=params, cache_type='live')
     
-    def get_intervals(self, session_key: str) -> List[Dict]:
+    def get_intervals(self, session_key: str, **kwargs) -> List[Dict]:
         """Get timing intervals"""
+        params = {"session_key": session_key}
+        params.update(kwargs)
         return self._make_request(
             "intervals",
-            params={"session_key": session_key},
+            params=params,
             cache_type='live'
         )
     
@@ -219,29 +292,17 @@ class OpenF1ClientEnhanced:
     def get_car_data(
         self,
         session_key: str,
-        driver_number: Optional[int] = None
+        driver_number: Optional[int] = None,
+        **kwargs
     ) -> List[Dict]:
         """
         Get real-time car telemetry data.
-        
-        Data includes:
-        - Speed (km/h)
-        - RPM
-        - Gear (0-8)
-        - Throttle (0-100%)
-        - Brake (boolean)
-        - DRS (0-14, active zones)
-        
-        Args:
-            session_key: Session identifier
-            driver_number: Optional driver filter
-            
-        Returns:
-            List of telemetry data points
+        ... (docstring truncated for brevity)
         """
         params = {"session_key": session_key}
         if driver_number:
             params["driver_number"] = driver_number
+        params.update(kwargs)
         return self._make_request("car_data", params=params, cache_type='live')
     
     def get_drivers(self, session_key: Optional[str] = None) -> List[Dict]:
@@ -458,26 +519,30 @@ class OpenF1ClientEnhanced:
             cache_type='live'
         )
     
-    async def get_location_async(self, session_key: str, driver_number: Optional[int] = None) -> List[Dict]:
+    async def get_location_async(self, session_key: str, driver_number: Optional[int] = None, **kwargs) -> List[Dict]:
         """Async version of get_location"""
         params = {"session_key": session_key}
         if driver_number:
             params["driver_number"] = driver_number
+        params.update(kwargs)
         return await self._make_request_async("location", params=params, cache_type='live')
     
-    async def get_intervals_async(self, session_key: str) -> List[Dict]:
+    async def get_intervals_async(self, session_key: str, **kwargs) -> List[Dict]:
         """Async version of get_intervals"""
+        params = {"session_key": session_key}
+        params.update(kwargs)
         return await self._make_request_async(
             "intervals",
-            params={"session_key": session_key},
+            params=params,
             cache_type='live'
         )
 
-    async def get_car_data_async(self, session_key: str, driver_number: Optional[int] = None) -> List[Dict]:
+    async def get_car_data_async(self, session_key: str, driver_number: Optional[int] = None, **kwargs) -> List[Dict]:
         """Async version of get_car_data"""
         params = {"session_key": session_key}
         if driver_number:
             params["driver_number"] = driver_number
+        params.update(kwargs)
         return await self._make_request_async("car_data", params=params, cache_type='live')
 
     async def get_drivers_async(self, session_key: Optional[str] = None) -> List[Dict]:
@@ -588,16 +653,32 @@ class OpenF1ClientEnhanced:
     def get_latest_session_key(self) -> str:
         """Get the most recent session key from the API"""
         try:
-            # Fetch sessions for current and previous year to find latest
+            # First try to find a session currently happening or that happened today
+            from config.settings import TODAY
+            today_sessions = self.get_sessions_by_date(TODAY)
+            if today_sessions:
+                # Sort by start time and pick the last one (most recent today)
+                today_sessions.sort(key=lambda x: x.get('date_start', ''))
+                logger.info(f"Found {len(today_sessions)} sessions for TODAY ({TODAY})")
+                return str(today_sessions[-1]['session_key'])
+
+            # Fallback to general latest
             current_year = datetime.now().year
             sessions = self.get_sessions(year=current_year)
             if not sessions:
                 sessions = self.get_sessions(year=current_year - 1)
             
             if sessions:
-                # Sort by date_start and return the last one
+                # Only consider sessions that have actually started (date_start <= now)
+                now_str = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+                started = [s for s in sessions if s.get('date_start', '9999') <= now_str]
+                if started:
+                    started.sort(key=lambda x: x.get('date_start', ''))
+                    return str(started[-1]['session_key'])
+                
+                # If none started, just take the first one of the year
                 sessions.sort(key=lambda x: x.get('date_start', ''))
-                return str(sessions[-1]['session_key'])
+                return str(sessions[0]['session_key'])
             
             return "" # Fallback to empty if no sessions found
         except Exception as e:
@@ -622,6 +703,10 @@ class OpenF1ClientEnhanced:
             self.session.close()
         except:
             pass
+        
+        # Note: aiohttp session should be closed in an async context, 
+        # but we can try to close it here as a best effort.
+        # However, for a singleton it's usually fine to let the process exit.
 
 
 # ============================================================================

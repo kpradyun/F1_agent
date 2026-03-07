@@ -6,7 +6,7 @@ import logging
 from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
 
-from config.settings import TODAY, LLM_MODEL
+from config.settings import TODAY, LLM_MODEL, GRID_CONTEXT
 from tools.live_tools import get_live_tools
 from tools.analysis_tools import get_analysis_tools
 from tools.replay_tools import get_replay_tools
@@ -24,13 +24,15 @@ def get_system_prompt():
     """Generate the system prompt for the agent"""
     return SystemMessage(content=(
         f"You are an F1 Race Engineer. Date: {TODAY}.\n"
+        f"{GRID_CONTEXT}\n"
         "Rules: Use tools for ANY F1 stats/data (2018-2026). Internal knowledge is outdated.\n"
         "- For driver comparisons (v rivals or teammates), use `f1_head_to_head`.\n"
         "- For testing/pre-season results, use `f1_testing_summary`.\n"
         "- For results/standings/schedules, use the corresponding tools.\n"
         "- CRITICAL: For statistics, head-to-head counts, standings, and RACE CLASSIFICATIONS, you MUST return the tool output exactly as provided. Do NOT summarize or remove details like 'Points' or 'Status'. If the tool provides a list of finishers with points, you MUST show the points for every driver listed. Provide the data VERBATIM first, then offer analysis ONLY if asked.\n"
-        "- NEVER pass the string 'nil' or 'unknown' as a `session_key`. If you don't know the key, leave the argument empty so the tool can resolve it automatically.\n"
-        "- If a tool returns a 401 error marked as 'ACCESS RESTRICTED' or 'Live Session', explain to the user that OpenF1 data is temporarily limited due to a live race weekend in progress."
+        "- NEVER pass strings like 'nil', 'unknown', 'today', or 'live_leaderboard' as a `session_key` or `grand_prix`. If you are referring to the CURRENT or MOST RECENT event, use the string 'latest' for the `grand_prix` argument and leave `session_key` empty.\n"
+        "- IF A TOOL RETURNS NULL, AN ERROR, OR A 'NOT AVAILABLE' MESSAGE, YOU MUST ADMIT THE DATA IS UNAVAILABLE. NEVER HALLUCINATE JSON, DATA TABLES, OR RESULTS. NEVER MAKE UP DRIVER TIMES OR POSITIONS. If `f1_session_results` returns an empty table or a note saying results are pending, report exactly that.\n"
+        "- If a live tool (f1_live_*) returns a 404 or says data is unavailable, it often means the session hasn't started or the live feed is delayed. In such cases, suggest checking the most recent completed session using `f1_session_results` instead of giving up."
     ))
 
 def get_all_tools() -> list:

@@ -52,9 +52,10 @@ def initialize_systems():
         task2 = progress.add_task("[cyan]Configuring FastF1 cache...", total=None)
         try:
             import fastf1
-            if not os.path.exists('cache'):
-                os.makedirs('cache')
-            fastf1.Cache.enable_cache('cache')
+            cache_dir = os.path.abspath('cache')
+            if not os.path.exists(cache_dir):
+                os.makedirs(cache_dir)
+            fastf1.Cache.enable_cache(cache_dir)
             progress.update(task2, description="[green]✓ FastF1 cache configured")
         except Exception as e:
             logger.error(f"FastF1 cache error: {e}")

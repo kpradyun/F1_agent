@@ -11,7 +11,7 @@ load_dotenv()
 
 # === API Configuration ===
 OPENF1_BASE_URL = "https://api.openf1.org/v1"
-API_TIMEOUT = 10
+API_TIMEOUT = 30
 API_MAX_RETRIES = 1
 
 # === Data Configuration ===

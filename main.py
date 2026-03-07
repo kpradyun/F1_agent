@@ -34,8 +34,10 @@ logging.basicConfig(
 )
 
 for name in logging.root.manager.loggerDict:
-    if 'langchain' not in name.lower():
+    if 'langchain' not in name.lower() and 'f1_data_miner' not in name.lower() and 'fastf1' not in name.lower():
         logging.getLogger(name).setLevel(logging.WARNING)
+    else:
+        logging.getLogger(name).setLevel(getattr(logging, LOG_LEVEL))
 
 logger = logging.getLogger("F1_Agent")
 console = Console()
