@@ -17,6 +17,35 @@ class SessionResolver:
         self.client = get_client()
         # Words to ignore when matching Grand Prix names
         self.ignored_tokens = {'grand', 'prix', 'race', 'gp'}
+        
+        # Mapping for common GP names that don't match location/circuit strings
+        self.gp_mapping = {
+            'british': ['silverstone', 'united kingdom'],
+            'dutch': ['zandvoort', 'netherlands'],
+            'spanish': ['barcelona', 'catalunya', 'spain'],
+            'belgian': ['spa', 'francorchamps', 'belgium'],
+            'italian': ['monza', 'imola', 'italy'],
+            'japanese': ['suzuka', 'japan'],
+            'brazilian': ['sao paulo', 'interlagos', 'brazil'],
+            'mexican': ['mexico city', 'mexico'],
+            'austrian': ['spielberg', 'red bull ring', 'austria'],
+            'canadian': ['montreal', 'gilles villeneuve', 'canada'],
+            'chinese': ['shanghai', 'china'],
+            'azerbaijan': ['baku'],
+            'hungarian': ['budapest', 'hungaroring', 'hungary'],
+            'emilia romagna': ['imola'],
+            'saudi arabian': ['jeddah', 'saudi arabia'],
+            'abu dhabi': ['yas marina', 'abu dhabi'],
+            'united states': ['austin', 'cotas', 'usa'],
+            'miami': ['miami', 'usa'],
+            'las vegas': ['las vegas', 'usa'],
+            'monaco': ['monte carlo', 'cote d\'azur', 'monaco'],
+            'emirati': ['abu dhabi', 'yas marina'],
+            'bahrain': ['sakhir', 'manama'],
+            'qatar': ['lusail', 'doha'],
+            'singapore': ['marina bay', 'singapore'],
+            'australian': ['melbourne', 'albert park', 'australia']
+        }
     
     def _extract_year(self, grand_prix: str, default_year: int) -> tuple[int, str]:
         """
@@ -78,20 +107,26 @@ class SessionResolver:
             
             name_str = f"{location} {circuit} {country}".lower()
             
-            # If no meaningful tokens, do exact substring match
-            if not gp_tokens:
+            # Check if any GP token is a key in our mapping
+            expanded_tokens = set(gp_tokens)
+            for token in gp_tokens:
+                if token in self.gp_mapping:
+                    expanded_tokens.update(self.gp_mapping[token])
+            
+            # If no meaningful tokens (after expansion), do exact substring match
+            if not expanded_tokens:
                 if full_query.lower() in name_str:
                     matches.append(session)
-            # Otherwise, check if any token matches
-            elif any(token in name_str for token in gp_tokens):
+            # Otherwise, check if any expanded token matches
+            elif any(token in name_str for token in expanded_tokens):
                 matches.append(session)
         
         if matches:
-            # Return the most recent match
-            matches.sort(key=lambda x: x['date_start'])
+            # Return the most recent match by date
+            matches.sort(key=lambda x: x.get('date_start', ''))
             return matches[-1]
         
-        return None
+        return ""
     
     def resolve(
         self,
@@ -110,6 +145,7 @@ class SessionResolver:
         Returns:
             Session key string
         """
+        logger.info(f"Resolving session: Year={year}, GP='{grand_prix}', Type='{session_type}'")
         # Handle "latest" special case
         if grand_prix == "latest":
             return self.client.get_latest_session_key()
@@ -119,11 +155,13 @@ class SessionResolver:
         
         try:
             # Fetch all sessions for the year
+            logger.info(f"Fetching sessions for year {year}...")
             sessions = self.client.get_sessions(year=year)
             
             if not sessions:
                 logger.warning(f"No sessions found for {year}. Using latest.")
-                return self.client.get_latest_session_key()
+                fallback = self.client.get_latest_session_key()
+                return str(fallback) if fallback else ""
             
             # Filter by session type
             filtered = [
@@ -141,12 +179,23 @@ class SessionResolver:
             
             if matched:
                 session_key = matched['session_key']
-                logger.info(
-                    f"Resolved '{grand_prix}' ({year}, {session_type}) "
-                    f"to session key: {session_key}"
-                )
-                return session_key
+                if session_key and str(session_key).lower() not in ['none', 'null', 'unknown', 'nil', '', 'undefined']:
+                    logger.info(
+                        f"Resolved '{grand_prix}' ({year}, {session_type}) "
+                        f"to session key: {session_key}"
+                    )
+                    return str(session_key)
             
+            # If no match but a year was provided, default to first/last race of that year 
+            # instead of global 'latest' (which could be the wrong year)
+            if filtered:
+                default_session = filtered[-1] # Last race usually better than first
+                session_key = default_session.get('session_key')
+                logger.warning(
+                    f"No match for '{grand_prix}' {year}. Defaulting to {default_session.get('location')} ({session_key})"
+                )
+                return str(session_key) if session_key else ""
+
             logger.warning(
                 f"No match found for '{grand_prix}' {year}. Using latest."
             )
@@ -154,7 +203,9 @@ class SessionResolver:
             
         except Exception as e:
             logger.error(f"Error resolving session: {e}")
-            return self.client.get_latest_session_key()
+            fallback = self.client.get_latest_session_key()
+            logger.info(f"Fallback resolution to: {fallback}")
+            return str(fallback) if fallback else ""
 
 
 # Singleton instance

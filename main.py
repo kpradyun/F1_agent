@@ -71,37 +71,52 @@ async def stream_agent_response(agent, messages):
     response_started = False
     last_tool_output = None
     
-    async for event in agent.astream({"messages": messages}, config=config, stream_mode="values"):
-        if "messages" not in event:
-            continue
-        
-        msg = event["messages"][-1]
-        
-        # Tool execution
-        if msg.type == "tool":
-            tool_name = getattr(msg, 'name', 'Unknown')
-            tool_output = getattr(msg, 'content', '')
+    try:
+        async for event in agent.astream({"messages": messages}, config=config, stream_mode="values"):
+            if "messages" not in event:
+                continue
             
-            console.print(f"[yellow]⟳ Executing: {tool_name}[/yellow]")
-            metrics.record_tool(tool_name)
+            msg = event["messages"][-1]
             
-            last_tool_output = tool_output
+            # Tool execution
+            if msg.type == "tool":
+                tool_name = getattr(msg, 'name', 'Unknown')
+                tool_output = getattr(msg, 'content', '')
+                
+                # Show tool execution in a nice way
+                icon = "🔍" if "lookup" in tool_name.lower() or "search" in tool_name.lower() else "🏎️"
+                if "all_time" in tool_name.lower(): icon = "🏆"
+                
+                console.print(f"[yellow]{icon} Executing: {tool_name}...[/yellow]")
+                metrics.record_tool(tool_name)
+                
+                last_tool_output = tool_output
+                
+                # Print tool output for certain tools
+                if any(keyword in tool_name.lower() for keyword in 
+                       ['strategy', 'plot', 'chart', 'visual', 'replay', 'head_to_head', 'summary', 'stats', 'champions', 'radio', 'media', 'results', 'session', 'classification']):
+                    console.print(f"\n[dim]{tool_output}[/dim]")
             
-            # Print tool output for certain tools
-            if any(keyword in tool_name.lower() for keyword in 
-                   ['strategy', 'plot', 'chart', 'visual', 'replay']):
-                console.print(f"\n[dim]Tool output: {tool_output}[/dim]")
-        
-        # AI response streaming
-        elif msg.type == "ai" and not msg.tool_calls:
-            if not response_started:
-                console.print("\n[bold cyan]Engineer:[/bold cyan] ", end="")
-                response_started = True
-            
-            new_text = msg.content[len(response_text):]
-            if new_text:
-                console.print(new_text, end="")
-                response_text = msg.content
+            # AI response streaming
+            elif msg.type == "ai" and not msg.tool_calls:
+                if not response_started:
+                    console.print("\n[bold cyan]Engineer:[/bold cyan] ", end="")
+                    response_started = True
+                
+                new_text = msg.content[len(response_text):]
+                if new_text:
+                    console.print(new_text, end="")
+                    response_text = msg.content
+    except Exception as e:
+        # Handle LLM errors gracefully during streaming
+        error_msg = str(e)
+        if "memory" in error_msg.lower():
+            console.print("\n[bold red]✕ Error: System out of memory for this model. Try a smaller one in config/settings.py.[/bold red]")
+        elif "not found" in error_msg.lower():
+            console.print(f"\n[bold red]✕ Error: Model '{LLM_MODEL}' not found. Please run 'ollama pull {LLM_MODEL}' or check config.[/bold red]")
+        else:
+            console.print(f"\n[bold red]✕ Error during generation: {e}[/bold red]")
+        return None
     
     if not response_text.strip() and last_tool_output:
         console.print(f"\n[bold cyan]Engineer:[/bold cyan] {last_tool_output}")
@@ -121,7 +136,7 @@ async def main_async():
     
     # Initialize quick lookup bypass
     bypass = QuickLookupBypass()
-    console.print("[dim]💡 Quick lookup bypass enabled for instant responses[/dim]")
+    console.print("[dim]Quick lookup bypass enabled for instant responses[/dim]")
     
     # Welcome banner
     console.print(Panel(
@@ -188,7 +203,7 @@ async def main_async():
             # Check for quick lookup bypass
             bypass_match = bypass.match(user_input)
             if bypass_match:
-                console.print(f"[cyan]⚡ Quick lookup: {bypass_match['name']}[/cyan]")
+                console.print(f"[cyan]Quick lookup: {bypass_match['name']}[/cyan]")
                 start_time = time.time()
                 
                 try:
@@ -236,8 +251,17 @@ async def main_async():
             break
             
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
-            logger.error(f"Main loop error: {e}", exc_info=True)
+            error_msg = str(e)
+            if "memory" in error_msg.lower():
+                console.print("\n[bold red]✕ ERROR: System out of memory. Try switching to a smaller model (e.g., llama3.2).[/bold red]")
+            elif "not found" in error_msg.lower():
+                console.print(f"\n[bold red]✕ ERROR: Model not found. Run 'ollama pull {LLM_MODEL}' or check config/settings.py.[/bold red]")
+            elif "connection" in error_msg.lower() or "connect" in error_msg.lower():
+                console.print("\n[bold red]✕ ERROR: Cannot connect to Ollama. Is it running? (Try 'ollama serve')[/bold red]")
+            else:
+                console.print(f"\n[bold red]✕ Unexpected Error: {e}[/bold red]")
+                
+            logger.error(f"Main loop error: {e}")
             display_status("Error Handler", "ERROR", 0.0)
 
 def main():

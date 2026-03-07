@@ -11,8 +11,8 @@ load_dotenv()
 
 # === API Configuration ===
 OPENF1_BASE_URL = "https://api.openf1.org/v1"
-API_TIMEOUT = 60
-API_MAX_RETRIES = 3
+API_TIMEOUT = 10
+API_MAX_RETRIES = 1
 
 # === Data Configuration ===
 DATA_DEFAULT_YEAR = 2025
@@ -35,7 +35,7 @@ SCREEN_HEIGHT = 900
 FPS = 30
 
 # === LLM Configuration ===
-LLM_MODEL = "qwen2.5:7b"  # Fast model that fits in 8GB RAM (2x faster than llama3.1)
+LLM_MODEL = "llama3.2:latest"  # Efficient model available on system (2GB RAM)
 LLM_TEMPERATURE = 0.3  # Faster generation while still accurate for tool calling
 
 # === Logging Configuration ===

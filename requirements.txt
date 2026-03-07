@@ -1,15 +1,15 @@
 # --- Core Agent Framework (Strict Pins) ---
-langchain-core==0.3.51
-langchain-text-splitters==0.3.8
-langchain-community==0.3.21
-langchain-ollama==0.2.2
-langgraph==0.3.4
+langchain-core~=0.3.51
+langchain-text-splitters~=0.3.8
+langchain-community~=0.3.21
+langchain-ollama~=0.2.2
+langgraph~=0.3.4
 # Explicitly pin the main package to match core 0.3.51
-langchain==0.3.23
+langchain~=0.3.23
 
 # --- LLM & Embeddings ---
 # Note: Installed separately in script to handle dependency overlap
-langchain-huggingface>=1.0.0
+langchain-huggingface~=0.3.0
 sentence-transformers>=3.0.0
 
 # --- Vector Store ---
@@ -19,6 +19,7 @@ faiss-cpu>=1.8.0
 fastf1>=3.4.0
 pandas>=2.2.0
 numpy>=2.0.0
+tabulate>=0.9.0         # Required for pandas.to_markdown()
 
 # --- Visualization ---
 matplotlib>=3.9.0
@@ -43,6 +44,7 @@ memory-profiler>=0.61.0  # Memory usage profiling
 # --- Document Processing ---
 pypdf>=5.0.0
 beautifulsoup4>=4.12.0
+lxml>=5.1.0              # Faster parser for BeautifulSoup and pandas.read_html
 
 # --- CLI, Logging & Utils ---
 rich>=13.0.0

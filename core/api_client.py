@@ -540,13 +540,19 @@ class OpenF1ClientEnhanced:
     async def get_latest_session_key_async(self) -> str:
         """Async version of get_latest_session_key"""
         try:
-            sessions = await self.get_sessions_async(session_key="latest")
+            current_year = datetime.now().year
+            sessions = await self.get_sessions_async(year=current_year)
+            if not sessions:
+                sessions = await self.get_sessions_async(year=current_year - 1)
+            
             if sessions:
-                return sessions[0]['session_key']
-            return "latest"
+                sessions.sort(key=lambda x: x.get('date_start', ''))
+                return str(sessions[-1]['session_key'])
+            
+            return ""
         except Exception as e:
             logger.error(f"Failed to get latest session async: {e}")
-            return "latest"
+            return ""
 
     
     async def get_all_driver_data_async(
@@ -580,15 +586,23 @@ class OpenF1ClientEnhanced:
         }
     
     def get_latest_session_key(self) -> str:
-        """Get the most recent session key"""
+        """Get the most recent session key from the API"""
         try:
-            sessions = self.get_sessions(session_key="latest")
+            # Fetch sessions for current and previous year to find latest
+            current_year = datetime.now().year
+            sessions = self.get_sessions(year=current_year)
+            if not sessions:
+                sessions = self.get_sessions(year=current_year - 1)
+            
             if sessions:
-                return sessions[0]['session_key']
-            return "latest"
+                # Sort by date_start and return the last one
+                sessions.sort(key=lambda x: x.get('date_start', ''))
+                return str(sessions[-1]['session_key'])
+            
+            return "" # Fallback to empty if no sessions found
         except Exception as e:
             logger.error(f"Failed to get latest session: {e}")
-            return "latest"
+            return ""
     
     def clear_cache(self):
         """Clear the entire cache"""

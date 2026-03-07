@@ -21,30 +21,37 @@ logger = logging.getLogger("AdvancedTools")
 
 @tool
 async def f1_live_car_telemetry(
-    session_key: str = "latest",
-    driver_number: Optional[int] = None
+    grand_prix: str = "latest",
+    year: int = 2025,
+    driver_number: Optional[int] = None,
+    session_key: str = None
 ) -> str:
     """
-    Get real-time car telemetry data (speed, RPM, gear, throttle, brake, DRS).
+    Get car telemetry data (speed, RPM, gear, throttle, brake, DRS).
+    Works for both LIVE and HISTORICAL sessions.
     
     Use when user asks about:
-    - Current speed, gear, or RPM
+    - Speed, gear, or RPM in a session
     - Throttle/brake application
     - DRS activation zones
-    - Live car performance data
+    - Car performance comparisons
     
     Args:
-        session_key: Session identifier (default: latest)
+        grand_prix: Grand Prix name or 'latest'
+        year: The F1 season (default: 2025)
         driver_number: Specific driver number (optional)
-        
-    Returns:
-        Formatted telemetry data with latest readings
+        session_key: Direct session key (optional, overrides GP/Year)
     """
     try:
+        from core.session_resolver import get_resolver
         client = get_enhanced_client()
         
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        if not session_key:
+            if grand_prix == "latest":
+                session_key = await client.get_latest_session_key_async()
+            else:
+                resolver = get_resolver()
+                session_key = resolver.resolve(year, grand_prix, "Race")
         
         telemetry = await client.get_car_data_async(session_key, driver_number)
         
@@ -77,24 +84,34 @@ async def f1_live_car_telemetry(
 
 
 @tool
-async def f1_driver_info(session_key: str = "latest") -> str:
+async def f1_driver_info(
+    grand_prix: str = "latest",
+    year: int = 2025,
+    session_key: str = None
+) -> str:
     """
     Get comprehensive driver information for a session.
     
     Use when user asks about:
-    - Driver lineup
-    - Team rosters
-    - Driver nationalities
+    - Driver lineup for a specific race
+    - Team rosters and nationalities
     - Driver abbreviations/numbers
     
-    Returns:
-        Complete driver information with teams and numbers
+    Args:
+        grand_prix: Grand Prix name or 'latest'
+        year: The F1 season (default: 2025)
+        session_key: Direct session key (optional, overrides GP/Year)
     """
     try:
+        from core.session_resolver import get_resolver
         client = get_enhanced_client()
         
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        if not session_key:
+            if grand_prix == "latest":
+                session_key = await client.get_latest_session_key_async()
+            else:
+                resolver = get_resolver()
+                session_key = resolver.resolve(year, grand_prix, "Race")
         
         drivers = await client.get_drivers_async(session_key)
         
@@ -125,26 +142,35 @@ async def f1_driver_info(session_key: str = "latest") -> str:
 
 @tool
 async def f1_pit_stop_analysis(
-    session_key: str = "latest",
-    driver_number: Optional[int] = None
+    grand_prix: str = "latest",
+    year: int = 2025,
+    driver_number: Optional[int] = None,
+    session_key: str = None
 ) -> str:
     """
-    Analyze pit stop performance and strategy.
+    Analyze pit stop performance and strategy for a session.
     
     Use when user asks about:
     - Pit stop times/durations
-    - Fastest pit stops
-    - Pit stop strategies
-    - Team pit crew performance
+    - Fastest pit stops in a race
+    - Pit stop ranking
     
-    Returns:
-        Pit stop analysis with timings and rankings
+    Args:
+        grand_prix: Grand Prix name or 'latest'
+        year: The F1 season (default: 2025)
+        driver_number: Specific driver number (optional)
+        session_key: Direct session key (optional, overrides GP/Year)
     """
     try:
+        from core.session_resolver import get_resolver
         client = get_enhanced_client()
         
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        if not session_key:
+            if grand_prix == "latest":
+                session_key = await client.get_latest_session_key_async()
+            else:
+                resolver = get_resolver()
+                session_key = resolver.resolve(year, grand_prix, "Race")
         
         pit_stops = await client.get_pit_stops_async(session_key, driver_number)
         
@@ -191,26 +217,34 @@ async def f1_pit_stop_analysis(
 
 
 @tool
-async def f1_race_control_messages(session_key: str = "latest") -> str:
+async def f1_race_control_messages(
+    grand_prix: str = "latest",
+    year: int = 2025,
+    session_key: str = None
+) -> str:
     """
-    Get race control messages (flags, penalties, safety car, DRS).
+    Get race control messages (flags, penalties, safety car, DRS) for a session.
     
     Use when user asks about:
-    - Yellow/red flags
-    - Safety car periods
-    - Virtual safety car
-    - DRS enabled/disabled
-    - Track status
-    - Penalties issued
+    - Race control events (SC, VSC, Flags)
+    - DRS status in a race
+    - Penalties issued during a session
     
-    Returns:
-        Chronological list of race control events
+    Args:
+        grand_prix: Grand Prix name or 'latest'
+        year: The F1 season (default: 2025)
+        session_key: Direct session key (optional, overrides GP/Year)
     """
     try:
+        from core.session_resolver import get_resolver
         client = get_enhanced_client()
         
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        if not session_key:
+            if grand_prix == "latest":
+                session_key = await client.get_latest_session_key_async()
+            else:
+                resolver = get_resolver()
+                session_key = resolver.resolve(year, grand_prix, "Race")
         
         messages = await client.get_race_control_async(session_key)
         
@@ -253,26 +287,35 @@ async def f1_race_control_messages(session_key: str = "latest") -> str:
 
 @tool
 async def f1_position_changes(
-    session_key: str = "latest",
-    driver_number: Optional[int] = None
+    grand_prix: str = "latest",
+    year: int = 2025,
+    driver_number: Optional[int] = None,
+    session_key: str = None
 ) -> str:
     """
     Track position changes throughout a session.
     
     Use when user asks about:
-    - Position battles
-    - Overtakes
-    - Who gained/lost positions
-    - Position evolution over race
+    - Position battles and overtakes
+    - Gained/lost positions in a race
+    - Final standings for a session
     
-    Returns:
-        Position change analysis with gains/losses
+    Args:
+        grand_prix: Grand Prix name or 'latest'
+        year: The F1 season (default: 2025)
+        driver_number: Specific driver number (optional)
+        session_key: Direct session key (optional, overrides GP/Year)
     """
     try:
+        from core.session_resolver import get_resolver
         client = get_enhanced_client()
         
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        if not session_key:
+            if grand_prix == "latest":
+                session_key = await client.get_latest_session_key_async()
+            else:
+                resolver = get_resolver()
+                session_key = resolver.resolve(year, grand_prix, "Race")
         
         positions = await client.get_position_async(session_key, driver_number)
         
@@ -335,26 +378,35 @@ async def f1_position_changes(
 
 @tool
 async def f1_stint_analysis(
-    session_key: str = "latest",
-    driver_number: Optional[int] = None
+    grand_prix: str = "latest",
+    year: int = 2025,
+    driver_number: Optional[int] = None,
+    session_key: str = None
 ) -> str:
     """
     Analyze tire stints and compound strategies.
     
     Use when user asks about:
-    - Tire compound choices
-    - Stint lengths
-    - Tire age
-    - Compound performance
+    - Tire choices and stint lengths
+    - Tire age and degradation
+    - Historical compound performance
     
-    Returns:
-        Detailed stint breakdown by driver
+    Args:
+        grand_prix: Grand Prix name or 'latest'
+        year: The F1 season (default: 2025)
+        driver_number: Specific driver number (optional)
+        session_key: Direct session key (optional, overrides GP/Year)
     """
     try:
+        from core.session_resolver import get_resolver
         client = get_enhanced_client()
         
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        if not session_key:
+            if grand_prix == "latest":
+                session_key = await client.get_latest_session_key_async()
+            else:
+                resolver = get_resolver()
+                session_key = resolver.resolve(year, grand_prix, "Race")
         
         stints = await client.get_stints_async(session_key, driver_number)
         
@@ -406,25 +458,34 @@ async def f1_stint_analysis(
 
 @tool
 async def f1_team_radio_log(
-    session_key: str = "latest",
-    driver_number: Optional[int] = None
+    grand_prix: str = "latest",
+    year: int = 2025,
+    driver_number: Optional[int] = None,
+    session_key: str = None
 ) -> str:
     """
-    Get team radio communications log.
+    Get team radio communications log for a session.
     
     Use when user asks about:
-    - Team radio messages
-    - Driver-engineer communications
-    - Strategy calls over radio
+    - Team radio messages and comms
+    - Historical strategy calls over radio
     
-    Returns:
-        List of team radio messages with timestamps
+    Args:
+        grand_prix: Grand Prix name or 'latest'
+        year: The F1 season (default: 2025)
+        driver_number: Specific driver number (optional)
+        session_key: Direct session key (optional, overrides GP/Year)
     """
     try:
+        from core.session_resolver import get_resolver
         client = get_enhanced_client()
         
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        if not session_key:
+            if grand_prix == "latest":
+                session_key = await client.get_latest_session_key_async()
+            else:
+                resolver = get_resolver()
+                session_key = resolver.resolve(year, grand_prix, "Race")
         
         radio = await client.get_team_radio_async(session_key, driver_number)
         
@@ -453,27 +514,35 @@ async def f1_team_radio_log(
 
 @tool
 async def f1_lap_analysis(
-    session_key: str = "latest",
-    driver_number: Optional[int] = None
+    grand_prix: str = "latest",
+    year: int = 2025,
+    driver_number: Optional[int] = None,
+    session_key: str = None
 ) -> str:
     """
-    Detailed lap time and sector analysis.
+    Detailed lap time and sector analysis for a session.
     
     Use when user asks about:
-    - Lap times
-    - Sector times
-    - Fastest laps
-    - Consistency
-    - Personal bests
+    - Lap/sector times comparison
+    - Fastest lap details
+    - Personal bests and consistency
     
-    Returns:
-        Comprehensive lap time breakdown
+    Args:
+        grand_prix: Grand Prix name or 'latest'
+        year: The F1 season (default: 2025)
+        driver_number: Specific driver number (optional)
+        session_key: Direct session key (optional, overrides GP/Year)
     """
     try:
+        from core.session_resolver import get_resolver
         client = get_enhanced_client()
         
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        if not session_key:
+            if grand_prix == "latest":
+                session_key = await client.get_latest_session_key_async()
+            else:
+                resolver = get_resolver()
+                session_key = resolver.resolve(year, grand_prix, "Race")
         
         laps = await client.get_laps_async(session_key, driver_number)
         

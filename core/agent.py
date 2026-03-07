@@ -14,6 +14,8 @@ from tools.reference_tools import get_reference_tools
 from tools.advanced_tools import get_advanced_tools
 from tools.predictive_tools import get_predictive_tools
 from tools.visualization_tools import get_visualization_tools
+from tools.media_tools import get_media_tools
+from tools.session_tools import get_session_tools
 from rag_engine import get_rag_tool
 
 logger = logging.getLogger("F1_Agent")
@@ -21,10 +23,14 @@ logger = logging.getLogger("F1_Agent")
 def get_system_prompt():
     """Generate the system prompt for the agent"""
     return SystemMessage(content=(
-        f"F1 engineer. Today: {TODAY}. "
-        "Tools: f1_constructor_champions, f1_pole_position_records, f1_fastest_lap_records, "
-        "f1_champions_quick_lookup, f1_schedule, f1_session_results. "
-        "USE ONE TOOL. RETURN ITS OUTPUT VERBATIM. NO COMMENTARY."
+        f"You are an F1 Race Engineer. Date: {TODAY}.\n"
+        "Rules: Use tools for ANY F1 stats/data (2018-2026). Internal knowledge is outdated.\n"
+        "- For driver comparisons (v rivals or teammates), use `f1_head_to_head`.\n"
+        "- For testing/pre-season results, use `f1_testing_summary`.\n"
+        "- For results/standings/schedules, use the corresponding tools.\n"
+        "- CRITICAL: For statistics, head-to-head counts, standings, and RACE CLASSIFICATIONS, you MUST return the tool output exactly as provided. Do NOT summarize or remove details like 'Points' or 'Status'. If the tool provides a list of finishers with points, you MUST show the points for every driver listed. Provide the data VERBATIM first, then offer analysis ONLY if asked.\n"
+        "- NEVER pass the string 'nil' or 'unknown' as a `session_key`. If you don't know the key, leave the argument empty so the tool can resolve it automatically.\n"
+        "- If a tool returns a 401 error marked as 'ACCESS RESTRICTED' or 'Live Session', explain to the user that OpenF1 data is temporarily limited due to a live race weekend in progress."
     ))
 
 def get_all_tools() -> list:
@@ -32,12 +38,13 @@ def get_all_tools() -> list:
     tools = []
     tools.extend(get_live_tools())           # 3 tools: weather, positions, intervals
     tools.extend(get_analysis_tools())       # 6 tools: schedule, results, telemetry, etc.
-    tools.extend(get_replay_tools())         # 1 tool: race replay
-    tools.extend(get_reference_tools())      # 6 tools: season winners, champions, records, poles, constructors, wikipedia
-    tools.extend(get_advanced_tools())       # 8 tools: complete API coverage
-    tools.extend(get_predictive_tools())     # 2 tools: tire life, overtake
-    tools.extend(get_visualization_tools())  # 2 tools: interactive charts
+    tools.extend(get_reference_tools())      # 10 tools: champions, winners, head-to-head, etc.
+    tools.extend(get_media_tools())          # 1 tool: radio download
+    tools.extend(get_session_tools())        # 4 tools: testing, weather, race control, telem breakdown
     tools.append(get_rag_tool())             # 1 tool: regulations
+    
+    # We prune predictive, visualization, and advanced tools to keep the model fast and accurate
+    # (34 tools was overwhelming Llama 3.2, now down to ~25)
     
     logger.info(f"Loaded {len(tools)} tools total")
     return tools

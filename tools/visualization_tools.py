@@ -11,7 +11,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from langchain_core.tools import tool
-from core.api_client import get_client
+import fastf1
+import fastf1.plotting
+from core.api_client import get_enhanced_client
 from config.settings import PLOTS_DIR
 
 logger = logging.getLogger("VizTools")
@@ -31,7 +33,8 @@ async def f1_plot_telemetry_interactive(
     Use for deep dive comparisons between two drivers.
     """
     try:
-        client = get_client()
+        fastf1.plotting.setup_mpl(misc_mpl_mods=False, color_scheme='fastf1')
+        client = get_enhanced_client()
         if session_key == "latest":
             session_key = await client.get_latest_session_key_async()
             
@@ -76,17 +79,51 @@ async def f1_plot_telemetry_interactive(
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
                             subplot_titles=("Speed (km/h)", "Throttle (%)", "Brake"))
         
+        # Get Driver Colors from FastF1
+        try:
+            # We need the year and event for FastF1. OpenF1 session gives meeting_key.
+            session_info = await client.get_sessions_async(session_key=session_key)
+            if session_info:
+                s_year = session_info[0]['year']
+                s_country = session_info[0]['country_name']
+                f1_session = fastf1.get_session(s_year, s_country, 'R')
+                # Load minimal data just for driver info
+                f1_session.load(telemetry=False, weather=False, messages=False)
+                
+                # Plotly uses hex strings directly, fastf1 returns #RRGGBB
+                d1_abbrev = str(driver1_number) # fallback
+                d2_abbrev = str(driver2_number) # fallback
+                
+                # Find abbreviations
+                for drv in f1_session.drivers:
+                    try:
+                        d = f1_session.get_driver(drv)
+                        if d['DriverNumber'] == str(driver1_number):
+                            d1_abbrev = d['Abbreviation']
+                        if d['DriverNumber'] == str(driver2_number):
+                            d2_abbrev = d['Abbreviation']
+                    except:
+                        pass
+                
+                color1 = fastf1.plotting.get_driver_color(d1_abbrev, session=f1_session)
+                color2 = fastf1.plotting.get_driver_color(d2_abbrev, session=f1_session)
+            else:
+                color1, color2 = 'cyan', 'magenta'
+        except Exception as e:
+            logger.warning(f"Could not load FastF1 colors, using defaults: {e}")
+            color1, color2 = 'cyan', 'magenta'
+
         # Speed
-        fig.add_trace(go.Scatter(x=df1['date'], y=df1['speed'], name=f"#{driver1_number}", line=dict(color='cyan')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df2['date'], y=df2['speed'], name=f"#{driver2_number}", line=dict(color='magenta')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df1['date'], y=df1['speed'], name=f"#{driver1_number}", line=dict(color=color1)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df2['date'], y=df2['speed'], name=f"#{driver2_number}", line=dict(color=color2)), row=1, col=1)
         
         # Throttle
-        fig.add_trace(go.Scatter(x=df1['date'], y=df1['throttle'], name=f"#{driver1_number}", line=dict(color='cyan'), showlegend=False), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df2['date'], y=df2['throttle'], name=f"#{driver2_number}", line=dict(color='magenta'), showlegend=False), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df1['date'], y=df1['throttle'], name=f"#{driver1_number}", line=dict(color=color1), showlegend=False), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df2['date'], y=df2['throttle'], name=f"#{driver2_number}", line=dict(color=color2), showlegend=False), row=2, col=1)
         
         # Brake
-        fig.add_trace(go.Scatter(x=df1['date'], y=df1['brake'], name=f"#{driver1_number}", line=dict(color='cyan'), showlegend=False), row=3, col=1)
-        fig.add_trace(go.Scatter(x=df2['date'], y=df2['brake'], name=f"#{driver2_number}", line=dict(color='magenta'), showlegend=False), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df1['date'], y=df1['brake'], name=f"#{driver1_number}", line=dict(color=color1), showlegend=False), row=3, col=1)
+        fig.add_trace(go.Scatter(x=df2['date'], y=df2['brake'], name=f"#{driver2_number}", line=dict(color=color2), showlegend=False), row=3, col=1)
         
         fig.update_layout(
             title=f"Telemetry Comparison: #{driver1_number} vs #{driver2_number}",
@@ -112,7 +149,8 @@ async def f1_plot_strategy_gantt(session_key: str = "latest") -> str:
     Saves as HTML.
     """
     try:
-        client = get_client()
+        fastf1.plotting.setup_mpl(misc_mpl_mods=False, color_scheme='fastf1')
+        client = get_enhanced_client()
         if session_key == "latest":
             session_key = await client.get_latest_session_key_async()
             
@@ -123,25 +161,29 @@ async def f1_plot_strategy_gantt(session_key: str = "latest") -> str:
         df = pd.DataFrame(stints)
         
         # Map compounds to colors
-        colors = {
-            "SOFT": "red",
-            "MEDIUM": "yellow",
-            "HARD": "white",
-            "INTERMEDIATE": "green",
-            "WET": "blue",
-            "TEST": "purple"
-        }
+        try:
+            session_info = await client.get_sessions_async(session_key=session_key)
+            if session_info:
+                s_year = session_info[0]['year']
+                s_country = session_info[0]['country_name']
+                f1_session = fastf1.get_session(s_year, s_country, 'R')
+                f1_session.load(telemetry=False, weather=False, messages=False)
+                colors = fastf1.plotting.get_compound_mapping(session=f1_session)
+            else:
+                colors = {"SOFT": "red", "MEDIUM": "yellow", "HARD": "white", "INTERMEDIATE": "green", "WET": "blue"}
+        except Exception:
+            colors = {"SOFT": "red", "MEDIUM": "yellow", "HARD": "white", "INTERMEDIATE": "green", "WET": "blue"}
         
         # Process for Gantt
-        # Need: Task (Driver), Start (Lap), Finish (Lap), Resource (Compound)
         gantt_data = []
         for _, row in df.iterrows():
+            compound = str(row.get('compound', '')).upper()
             gantt_data.append(dict(
                 Driver=f"#{row['driver_number']}",
                 Start=row['lap_start'],
                 Finish=row['lap_end'],
-                Compound=row.get('compound', 'UNKNOWN'),
-                Color=colors.get(str(row.get('compound', '')).upper(), 'gray')
+                Compound=compound,
+                Color=colors.get(compound, '#808080')
             ))
             
         df_gantt = pd.DataFrame(gantt_data)

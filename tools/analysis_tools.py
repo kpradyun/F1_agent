@@ -64,9 +64,10 @@ async def f1_telemetry_plot(
 ) -> str:
     """
     NEW: Enhanced with Delta Trace.
-    Creates speed comparison + time delta plot between two drivers.
-    Use when user asks to: compare drivers, telemetry, speed trace, lap analysis.
+    Creates speed comparison + time delta plot between two drivers in a SPECIFIC session.
+    Use when user asks to: compare drivers in a race, telemetry, speed trace, lap analysis.
     Shows where time was gained/lost over the lap distance.
+    NOTE: For season-long headcount/points comparison, use f1_head_to_head instead.
     Session types: 'Race', 'Qualifying', 'Sprint', 'Sprint Qualifying'
     """
     try:
@@ -105,14 +106,11 @@ async def f1_tire_strategy(
         gantt_result = await wrapper.run_sync_tool(
             get_tire_strategy_gantt, year, grand_prix, session
         )
-        text_result = await wrapper.run_sync_tool(
-            get_tire_strategy_analysis, year, grand_prix, session
-        )
         
         if gantt_result.startswith("plots/"):
-            return f"Tire strategy Gantt chart saved: {gantt_result}\n\n{text_result}"
+            return f"Tire strategy Gantt chart saved: {gantt_result}"
         else:
-            return f"{gantt_result}\n\n{text_result}"
+            return gantt_result
             
     except Exception as e:
         logger.error(f"Tire strategy failed: {e}")

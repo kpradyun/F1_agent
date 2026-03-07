@@ -4,12 +4,32 @@ Real-time F1 data tools for weather, positions, and intervals
 """
 import logging
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import fastf1.plotting
 from langchain_core.tools import tool
-from core.api_client import get_client
-from config.settings import PLOTS_DIR
+from core.api_client import get_enhanced_client
+from config.settings import PLOTS_DIR, TODAY
 
 logger = logging.getLogger("LiveTools")
+
+async def verify_live_session(client, session_key: str) -> str:
+    """Verifies that the session is actually happening today. Returns session_key or raises Exception."""
+    if session_key == "latest":
+        sessions = await client.get_sessions_async(session_key="latest")
+        if not sessions:
+            raise Exception("No sessions available from API.")
+        
+        latest_session = sessions[0]
+        date_start = latest_session.get('date_start', '')
+        date_end = latest_session.get('date_end', '')
+        
+        if not date_start.startswith(TODAY) and not date_end.startswith(TODAY):
+            raise Exception(f"There is no live F1 session occurring today ({TODAY}). The last recorded session was {latest_session.get('session_name')} on {date_start.split('T')[0]}.")
+            
+        return latest_session['session_key']
+    return session_key
 
 
 @tool
@@ -21,9 +41,7 @@ async def f1_live_weather(session_key: str = "latest") -> str:
     """
     try:
         client = get_enhanced_client()
-        
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        session_key = await verify_live_session(client, session_key)
         
         weather_data = await client.get_weather_async(session_key)
         
@@ -57,9 +75,7 @@ async def f1_live_position_map(session_key: str = "latest") -> str:
     """
     try:
         client = get_enhanced_client()
-        
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        session_key = await verify_live_session(client, session_key)
 
         location_data = await client.get_location_async(session_key)
         df = pd.DataFrame(location_data)
@@ -69,6 +85,7 @@ async def f1_live_position_map(session_key: str = "latest") -> str:
 
         current_positions = df.sort_values('date').groupby('driver_number').tail(1)
 
+        fastf1.plotting.setup_mpl(misc_mpl_mods=False, color_scheme='fastf1')
         plt.figure(figsize=(12, 9))
         plt.style.use('dark_background')
         
@@ -129,9 +146,7 @@ async def f1_live_intervals(session_key: str = "latest") -> str:
     """
     try:
         client = get_enhanced_client()
-        
-        if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
+        session_key = await verify_live_session(client, session_key)
         
         intervals = await client.get_intervals_async(session_key)
         df = pd.DataFrame(intervals)

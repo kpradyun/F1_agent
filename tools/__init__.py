@@ -4,11 +4,15 @@ from .analysis_tools import get_analysis_tools
 from .replay_tools import get_replay_tools
 from .reference_tools import get_reference_tools
 from .advanced_tools import get_advanced_tools
+from .media_tools import get_media_tools
+from .session_tools import get_session_tools
 
 __all__ = [
     'get_live_tools',
     'get_analysis_tools',
     'get_replay_tools',
     'get_reference_tools',
-    'get_advanced_tools'
+    'get_advanced_tools',
+    'get_media_tools',
+    'get_session_tools'
 ]

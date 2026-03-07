@@ -153,9 +153,9 @@ Prediction: """
 
         if prediction['will_catch']:
             laps = prediction['laps_to_catch']
-            output += f"CATCH EXPECTED in ~{laps} laps 🎯"
+            output += f"CATCH EXPECTED in ~{laps} laps"
         else:
-            output += f"NO CATCH PREDICTED ❌ (Chaser is slower/equal)"
+            output += f"NO CATCH PREDICTED (Chaser is slower/equal)"
             
         return output
         
