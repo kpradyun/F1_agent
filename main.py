@@ -14,7 +14,11 @@ from rich.panel import Panel
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="fastf1")
+warnings.filterwarnings("ignore", category=UserWarning, module="langchain")
+warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+warnings.filterwarnings("ignore", message=".*LangChainDeprecationWarning.*")
 
 from config.settings import TODAY, LOG_LEVEL, LOG_FORMAT, LOG_FILE
 from core.initialization import initialize_systems, get_llm

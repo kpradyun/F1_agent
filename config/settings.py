@@ -35,8 +35,12 @@ SCREEN_HEIGHT = 900
 FPS = 30
 
 # === LLM Configuration ===
-LLM_MODEL = "llama3.2:latest"  # Efficient model available on system (2GB RAM)
-LLM_TEMPERATURE = 0.3  # Faster generation while still accurate for tool calling
+# LLM_PROVIDER: "ollama" (local, default) or "gemini" (cloud fallback, needs GEMINI_API_KEY)
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
+LLM_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+LLM_TEMPERATURE = 0.3
 
 # === Logging Configuration ===
 LOG_LEVEL = "INFO"

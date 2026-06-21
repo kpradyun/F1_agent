@@ -11,6 +11,7 @@ langchain~=0.3.23
 # Note: Installed separately in script to handle dependency overlap
 langchain-huggingface~=0.3.0
 sentence-transformers>=3.0.0
+langchain-google-genai>=2.0.0  # optional cloud LLM fallback (needs GEMINI_API_KEY)
 
 # --- Vector Store ---
 faiss-cpu>=1.8.0

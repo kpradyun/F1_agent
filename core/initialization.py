@@ -7,7 +7,10 @@ import logging
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.console import Console
 
-from config.settings import LLM_MODEL, LLM_TEMPERATURE
+from config.settings import (
+    LLM_MODEL, LLM_TEMPERATURE, LLM_PROVIDER,
+    GEMINI_MODEL, GEMINI_API_KEY,
+)
 from langchain_ollama import ChatOllama
 from utils.cache_manager import get_cache
 
@@ -17,6 +20,57 @@ console = Console()
 # Global variables
 llm = None
 QuickLookupBypass = None
+
+def _initialize_llm(progress, task_id):
+    """
+    Try Ollama first. If unavailable (or LLM_PROVIDER=gemini), fall back to Gemini.
+    Raises RuntimeError if neither provider succeeds.
+    """
+    global llm
+
+    if LLM_PROVIDER == "gemini":
+        return _try_gemini(progress, task_id)
+
+    # Default: try Ollama
+    try:
+        candidate = ChatOllama(model=LLM_MODEL, temperature=LLM_TEMPERATURE)
+        # Cheap test call to confirm Ollama is actually reachable
+        candidate.invoke("ping")
+        llm = candidate
+        progress.update(task_id, description=f"[green]✓ Ollama ({LLM_MODEL}) connected")
+        return llm
+    except Exception as e:
+        logger.warning(f"Ollama unavailable ({e}), trying Gemini fallback...")
+        progress.update(task_id, description="[yellow]⚠ Ollama unavailable — trying Gemini...")
+        return _try_gemini(progress, task_id)
+
+
+def _try_gemini(progress, task_id):
+    """Initialize ChatGoogleGenerativeAI as the LLM."""
+    global llm
+    if not GEMINI_API_KEY:
+        progress.update(task_id, description="[red]✗ No LLM available (set GEMINI_API_KEY in .env)")
+        raise RuntimeError(
+            "Ollama is not running and GEMINI_API_KEY is not set.\n"
+            "  Option A: start Ollama with 'ollama serve'\n"
+            "  Option B: add GEMINI_API_KEY=... to your .env file and set LLM_PROVIDER=gemini"
+        )
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        llm = ChatGoogleGenerativeAI(
+            model=GEMINI_MODEL,
+            temperature=LLM_TEMPERATURE,
+            google_api_key=GEMINI_API_KEY,
+        )
+        progress.update(task_id, description=f"[green]✓ Gemini ({GEMINI_MODEL}) connected")
+        return llm
+    except Exception as e:
+        logger.error(f"Gemini initialization error: {e}")
+        progress.update(task_id, description="[red]✗ Gemini connection failed")
+        raise RuntimeError(f"Could not connect to any LLM provider: {e}") from e
+
 
 def initialize_systems():
     """
@@ -62,13 +116,7 @@ def initialize_systems():
             progress.update(task2, description="[yellow]⚠ FastF1 cache issues")
         
         task3 = progress.add_task("[cyan]Connecting to LLM...", total=None)
-        try:
-            llm = ChatOllama(model=LLM_MODEL, temperature=LLM_TEMPERATURE)
-            progress.update(task3, description="[green]✓ LLM connection established")
-        except Exception as e:
-            logger.error(f"LLM initialization error: {e}")
-            progress.update(task3, description="[red]✗ LLM connection failed")
-            raise
+        llm = _initialize_llm(progress, task3)
         
         task4 = progress.add_task("[cyan]Preparing cache system...", total=None)
         try:
