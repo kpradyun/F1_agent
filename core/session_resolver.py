@@ -125,8 +125,8 @@ class SessionResolver:
             # Return the most recent match by date
             matches.sort(key=lambda x: x.get('date_start', ''))
             return matches[-1]
-        
-        return ""
+
+        return None
     
     def resolve(
         self,

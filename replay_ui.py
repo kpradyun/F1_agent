@@ -175,10 +175,10 @@ class F1ReplayWindow(arcade.Window):
         for sec in self.track_layout.get('sectors', []):
             sx, sy = self.to_screen(sec['x'], sec['y'])
             arcade.draw_line(sx - 12, sy, sx + 12, sy, (255, 220, 0), 3)
-            arcade.draw_text(
+            arcade.Text(
                 sec['name'], sx + 18, sy, (255, 220, 0), 11, 
                 bold=True, anchor_x="left", anchor_y="center"
-            )
+            ).draw()
 
         for drv, data in self.current_frame_data.items():
             if data['status'] == 'OUT': 
@@ -189,14 +189,14 @@ class F1ReplayWindow(arcade.Window):
             if drv == self.selected_driver:
                 arcade.draw_circle_filled(sx, sy, SELECTED_CAR_SIZE + 3, (255, 255, 255, 30))
                 arcade.draw_circle_outline(sx, sy, SELECTED_CAR_SIZE, (255, 20, 20), 3)
-                arcade.draw_text(
+                arcade.Text(
                     data['name'], sx + 20, sy + 8, (0, 0, 0), 13, 
                     bold=True, anchor_x="left", anchor_y="center"
-                )
-                arcade.draw_text(
+                ).draw()
+                arcade.Text(
                     data['name'], sx + 19, sy + 9, (255, 255, 255), 13, 
                     bold=True, anchor_x="left", anchor_y="center"
-                )
+                ).draw()
             
             arcade.draw_circle_filled(sx, sy, CAR_DOT_SIZE, data['color'])
             arcade.draw_circle_outline(sx, sy, CAR_DOT_SIZE, (255, 255, 255), 2)
@@ -342,14 +342,21 @@ class F1ReplayWindow(arcade.Window):
         self._calc_track_scale()
         self._init_ui_components()
 
+import multiprocessing
+
+def _run_replay_process(data, countdown, fps):
+    import time
+    time.sleep(countdown)
+    window = F1ReplayWindow(data)
+    window.set_update_rate(1/fps)
+    arcade.run()
+
 def run_replay_threaded(data):
-    """Run the replay in a separate thread"""
-    def run():
-        time.sleep(COUNTDOWN_DURATION)
-        window = F1ReplayWindow(data)
-        window.set_update_rate(1/FPS)
-        arcade.run()
-    
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-    return thread
+    """Run the replay in a separate process to satisfy Pyglet's main-thread requirement on Windows"""
+    p = multiprocessing.Process(
+        target=_run_replay_process, 
+        args=(data, COUNTDOWN_DURATION, FPS), 
+        daemon=True
+    )
+    p.start()
+    return p

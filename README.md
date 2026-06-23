@@ -3,6 +3,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![FastF1](https://img.shields.io/badge/FastF1-enabled-red.svg)](https://github.com/theOehrly/Fast-F1)
 [![LangChain](https://img.shields.io/badge/LangChain-powered-green.svg)](https://www.langchain.com/)
+[![Tests](https://img.shields.io/badge/tests-36%20passing-brightgreen)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 An intelligent Formula 1 data analysis agent powered by LangChain, FastF1, OpenF1 API, and local LLM technology via Ollama. Ask natural-language questions and get data-driven F1 insights — from 1950 historical records to live race telemetry, with FIA regulation lookup via RAG.
@@ -15,7 +16,7 @@ An intelligent Formula 1 data analysis agent powered by LangChain, FastF1, OpenF
 - **Retrieval-Augmented Generation** (FAISS + HuggingFace) over official FIA regulations
 - **Dual data sources**: FastF1 (historical, cached) + OpenF1 API (live/real-time)
 - **Multi-level caching** for fast repeated queries
-- **Local LLM inference** via Ollama (no cloud API keys required)
+- **Local LLM inference** via Ollama with optional Gemini cloud fallback
 - **Interactive race replay** via Arcade (2D animated visualization)
 - Graceful degradation when Ollama, internet, or the regulations DB are unavailable
 
@@ -87,8 +88,8 @@ pip install -r requirements.txt
 # Linux:   curl -fsSL https://ollama.com/install.sh | sh
 # Windows: download from https://ollama.com/download
 
-# 5. Pull the LLM (one-time download ~4 GB)
-ollama pull qwen2.5:7b
+# 5. Pull the LLM (one-time download ~2–4 GB)
+ollama pull llama3.2:latest
 
 # 6. (Optional) Configure settings
 cp .env.example .env
@@ -106,10 +107,11 @@ Settings can be adjusted via `.env` or `config/settings.py`:
 
 | Variable | Default | Description |
 |---|---|---|
-| `OLLAMA_MODEL` | `qwen2.5:7b` | LLM model to use via Ollama |
-| `DEFAULT_YEAR` | `2024` | Fallback season for data queries |
+| `LLM_PROVIDER` | `ollama` | `ollama` (local) or `gemini` (cloud — needs `GEMINI_API_KEY`) |
+| `OLLAMA_MODEL` | `llama3.2:latest` | LLM model to use via Ollama |
+| `GEMINI_API_KEY` | _(empty)_ | Gemini API key for cloud fallback |
+| `DEFAULT_YEAR` | `2025` | Fallback season for data queries |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`) |
-| `CACHE_DIR` | `~/.cache/fastf1` | FastF1 data cache location |
 
 ---
 
@@ -130,13 +132,14 @@ Once the agent is running, try:
 
 ## Toolset
 
-The agent uses **25+ specialized tools** across six categories:
+The agent uses **30 specialized tools** across seven categories:
 
-- **Reference (10):** World champions, pole positions, fastest laps, head-to-head records, season winners
-- **Analysis (6):** Race results, lap telemetry, tire strategy, pit stop metrics
-- **Session (4):** Testing summaries, weather logs, race control messages
-- **Live (3):** Real-time weather, track positions, timing intervals (via OpenF1)
-- **Media (1):** Team radio downloads
+- **Reference (12):** World champions, pole positions, all-time records, head-to-head, career stats, circuit guide, reliability analysis, diagnostics
+- **Analysis (6):** Schedule, race results, lap telemetry, tire strategy Gantt chart, championship calculator, weekend summary
+- **Session (6):** Testing summaries, weather logs, race control messages, telemetry breakdown, tyre analysis, sector comparison
+- **Live (4):** Real-time weather, track position map, timing intervals, leaderboard (via OpenF1 API)
+- **Media (1):** Team radio downloads (mp3)
+- **Replay (1):** Interactive Arcade race replay with telemetry overlay
 - **RAG (1):** 2026 FIA Technical, Sporting, and Financial regulation search
 
 ---
@@ -153,12 +156,23 @@ If `f1_rules_db/` is missing, the agent **automatically rebuilds** it on the fir
 
 ---
 
+## Testing
+
+```bash
+pip install pytest
+pytest tests/ -v
+```
+
+36 tests covering config validation, quick lookup pattern matching, year range checks, and tool composition — all run without any network calls or LLM.
+
+---
+
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
 | `Error: Ollama not running` | Run `ollama serve` in a separate terminal |
-| `Model not found` | Run `ollama pull qwen2.5:7b` |
+| `Model not found` | Run `ollama pull llama3.2:latest` (or set `LLM_PROVIDER=gemini` in `.env`) |
 | `ollama list` shows no models | Pull the model first (see above) |
 | First query is slow | FastF1 downloads session data on first access; subsequent calls use cache |
 | `f1_rules_db` missing | The agent rebuilds it automatically on first RAG query |
@@ -170,7 +184,7 @@ If `f1_rules_db/` is missing, the agent **automatically rebuilds** it on the fir
 
 ## Known Limitations
 
-- **Ollama required:** No cloud LLM fallback — Ollama must be running locally
+- **Ollama default:** Ollama is the default LLM. If Ollama isn't running, set `LLM_PROVIDER=gemini` in `.env` and provide a `GEMINI_API_KEY` to use the Gemini cloud fallback instead.
 - **Live data:** OpenF1 live endpoints only work during active Formula 1 sessions
 - **Replay graphics:** `arcade` requires a graphical display — not available in headless/SSH environments
 - **Telemetry coverage:** High-resolution lap telemetry available from 2018 onwards

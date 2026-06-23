@@ -15,7 +15,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import aiohttp
 from functools import lru_cache
-from config.settings import OPENF1_BASE_URL, API_TIMEOUT, API_MAX_RETRIES
+from config.settings import OPENF1_BASE_URL, JOLPICA_BASE_URL, API_TIMEOUT, API_MAX_RETRIES
 
 logger = logging.getLogger("OpenF1_Enhanced")
 
@@ -250,12 +250,6 @@ class OpenF1ClientEnhanced:
         Get sessions for a specific date (YYYY-MM-DD).
         Useful for resolving 'today' to a specific session key.
         """
-        # OpenF1 supports date operators like >= or <
-        # We search for sessions starting today or ending today
-        start_filter = f">{date_str}T00:00:00"
-        end_filter = f"<{date_str}T23:59:59"
-        
-        # Use >= operator for date_start to include sessions starting today
         start_filter = f">={date_str}T00:00:00"
         return self.get_sessions(date_start=start_filter)
     
@@ -701,7 +695,7 @@ class OpenF1ClientEnhanced:
         """Cleanup: close session on deletion"""
         try:
             self.session.close()
-        except:
+        except Exception:
             pass
         
         # Note: aiohttp session should be closed in an async context, 
@@ -739,3 +733,527 @@ def get_client() -> OpenF1ClientEnhanced:
 
 # Alias for class name compatibility
 OpenF1Client = OpenF1ClientEnhanced
+
+
+# ============================================================================
+# Jolpica Client  —  community Ergast mirror with live current-season data
+# ============================================================================
+
+class JolpicaClient:
+    """
+    REST client for api.jolpi.ca/ergast/f1 — the community-maintained Ergast
+    mirror. Unlike the deprecated ergast.com or the FastF1 Ergast wrapper, this
+    API has data for the current season within minutes of each session ending.
+
+    All methods return plain Python dicts/lists parsed from JSON — no pandas,
+    no FastF1 dependency.
+    """
+
+    BASE = JOLPICA_BASE_URL
+
+    def __init__(self):
+        self._session = requests.Session()
+        retry = Retry(
+            total=API_MAX_RETRIES,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=5, pool_maxsize=10)
+        self._session.mount("https://", adapter)
+        self._session.headers.update({"User-Agent": "F1Agent/1.0"})
+        # Short-lived in-process cache: key → (data, expires_at)
+        self._cache: dict = {}
+
+    def _get(self, path: str, ttl: int = 300, params: dict | None = None) -> dict:
+        """GET {BASE}/{path}.json[?params] with caching."""
+        url = f"{self.BASE}/{path}.json"
+        if params:
+            qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+            url = f"{url}?{qs}"
+        if url in self._cache:
+            data, exp = self._cache[url]
+            if datetime.now().timestamp() < exp:
+                return data
+        resp = self._session.get(url, timeout=API_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        self._cache[url] = (data, datetime.now().timestamp() + ttl)
+        return data
+
+    # ── Standings ────────────────────────────────────────────────────────────
+
+    def get_driver_standings(self, year: int) -> list[dict]:
+        """
+        Returns list of driver standing entries for *year*.
+        Each entry: {position, points, wins, driver_name, team_name, nationality, code}
+        """
+        data = self._get(f"{year}/driverStandings", ttl=120)
+        lists = (
+            data.get("MRData", {})
+                .get("StandingsTable", {})
+                .get("StandingsLists", [])
+        )
+        if not lists:
+            return []
+        rows = []
+        for entry in lists[0].get("DriverStandings", []):
+            d = entry.get("Driver", {})
+            c = entry.get("Constructors", [{}])[0]
+            rows.append({
+                "position": entry.get("position", "?"),
+                "points": entry.get("points", "0"),
+                "wins": entry.get("wins", "0"),
+                "driver_name": f"{d.get('givenName', '')} {d.get('familyName', '')}".strip(),
+                "code": d.get("code", ""),
+                "team_name": c.get("name", ""),
+                "nationality": d.get("nationality", ""),
+            })
+        return rows
+
+    def get_constructor_standings(self, year: int) -> list[dict]:
+        """
+        Returns list of constructor standing entries for *year*.
+        Each entry: {position, points, wins, team_name, nationality}
+        """
+        data = self._get(f"{year}/constructorStandings", ttl=120)
+        lists = (
+            data.get("MRData", {})
+                .get("StandingsTable", {})
+                .get("StandingsLists", [])
+        )
+        if not lists:
+            return []
+        rows = []
+        for entry in lists[0].get("ConstructorStandings", []):
+            c = entry.get("Constructor", {})
+            rows.append({
+                "position": entry.get("position", "?"),
+                "points": entry.get("points", "0"),
+                "wins": entry.get("wins", "0"),
+                "team_name": c.get("name", ""),
+                "nationality": c.get("nationality", ""),
+            })
+        return rows
+
+    # ── Race results ─────────────────────────────────────────────────────────
+
+    def get_race_winners(self, year: int) -> list[dict]:
+        """
+        Returns all race winners for *year* (position=1 per race).
+        Each entry: {round, race_name, date, circuit, winner, team}
+        """
+        data = self._get(f"{year}/results/1", ttl=300)
+        races = (
+            data.get("MRData", {})
+                .get("RaceTable", {})
+                .get("Races", [])
+        )
+        rows = []
+        for race in races:
+            result = race.get("Results", [{}])[0]
+            d = result.get("Driver", {})
+            c = result.get("Constructor", {})
+            rows.append({
+                "round": race.get("round", "?"),
+                "race_name": race.get("raceName", ""),
+                "date": race.get("date", ""),
+                "circuit": race.get("Circuit", {}).get("circuitName", ""),
+                "winner": f"{d.get('givenName', '')} {d.get('familyName', '')}".strip(),
+                "team": c.get("name", ""),
+            })
+        return rows
+
+    def get_season_schedule(self, year: int) -> list[dict]:
+        """Returns the race calendar for *year*."""
+        data = self._get(f"{year}", ttl=3600)
+        races = (
+            data.get("MRData", {})
+                .get("RaceTable", {})
+                .get("Races", [])
+        )
+        return [
+            {
+                "round": r.get("round"),
+                "race_name": r.get("raceName"),
+                "date": r.get("date"),
+                "circuit_id": r.get("Circuit", {}).get("circuitId", ""),
+                "circuit": r.get("Circuit", {}).get("circuitName", ""),
+                "locality": r.get("Circuit", {}).get("Location", {}).get("locality", ""),
+                "country": r.get("Circuit", {}).get("Location", {}).get("country", ""),
+            }
+            for r in races
+        ]
+
+    def get_circuit_winners(self, circuit_id: str, limit: int = 5) -> list[dict]:
+        """
+        Returns the last *limit* race winners at a specific circuit.
+        Uses the Jolpica endpoint /circuits/{circuitId}/results/1.json
+        Each entry: {year, race_name, winner, team}
+        """
+        data = self._get(f"circuits/{circuit_id}/results/1", ttl=3600)
+        races = (
+            data.get("MRData", {})
+                .get("RaceTable", {})
+                .get("Races", [])
+        )
+        rows = []
+        for race in reversed(races):  # most recent first
+            result = race.get("Results", [{}])[0]
+            d = result.get("Driver", {})
+            c = result.get("Constructor", {})
+            rows.append({
+                "year": race.get("season", ""),
+                "race_name": race.get("raceName", ""),
+                "winner": f"{d.get('givenName', '')} {d.get('familyName', '')}".strip(),
+                "team": c.get("name", ""),
+            })
+            if len(rows) >= limit:
+                break
+        return rows
+
+    def get_driver_career(self, driver_id: str) -> dict:
+        """
+        Returns career totals for a driver from Jolpica.
+        driver_id: Jolpica driver identifier e.g. 'hamilton', 'max_verstappen'.
+        Returns: {name, nationality, wins, poles, podiums, championships, entries}
+        """
+        # Wins (position = 1)
+        wins_data = self._get(f"drivers/{driver_id}/results/1", ttl=3600)
+        wins = int(wins_data.get("MRData", {}).get("total", 0))
+
+        # Podiums: 2nd and 3rd place finishes (wins already counted)
+        try:
+            p2 = int(self._get(f"drivers/{driver_id}/results/2", ttl=3600)
+                     .get("MRData", {}).get("total", 0))
+            p3 = int(self._get(f"drivers/{driver_id}/results/3", ttl=3600)
+                     .get("MRData", {}).get("total", 0))
+        except Exception:
+            p2 = p3 = 0
+        podiums = wins + p2 + p3
+
+        # Pole positions (qualifying position 1)
+        poles_data = self._get(f"drivers/{driver_id}/qualifying/1", ttl=3600)
+        poles = int(poles_data.get("MRData", {}).get("total", 0))
+
+        # Total race entries
+        entries_data = self._get(f"drivers/{driver_id}/results", ttl=3600)
+        entries = int(entries_data.get("MRData", {}).get("total", 0))
+
+        # Championships: enumerate the driver's seasons and count P1 title finishes.
+        # The /drivers/{id}/driverStandings/1 filter endpoint returns 400 on Jolpica,
+        # so we use the seasons list + per-year winner check instead.
+        championships = 0
+        try:
+            seasons_data = self._get(f"drivers/{driver_id}/seasons", ttl=3600, params={"limit": 50})
+            seasons = [
+                s.get("season")
+                for s in seasons_data.get("MRData", {})
+                                     .get("SeasonTable", {})
+                                     .get("Seasons", [])
+            ]
+            for yr in seasons:
+                try:
+                    yr_data = self._get(f"{yr}/driverStandings/1", ttl=3600)
+                    lists = yr_data.get("MRData", {}).get("StandingsTable", {}).get("StandingsLists", [])
+                    if lists:
+                        winner = (lists[0].get("DriverStandings", [{}])[0]
+                                          .get("Driver", {}).get("driverId", ""))
+                        if winner == driver_id:
+                            championships += 1
+                except Exception:
+                    pass
+        except Exception:
+            championships = 0
+
+        # Driver info (from first results page)
+        races = (
+            entries_data.get("MRData", {})
+                        .get("RaceTable", {})
+                        .get("Races", [])
+        )
+        driver_info = {}
+        if races:
+            results = races[0].get("Results", [{}])
+            if results:
+                d = results[0].get("Driver", {})
+                driver_info = {
+                    "name": f"{d.get('givenName', '')} {d.get('familyName', '')}".strip(),
+                    "nationality": d.get("nationality", ""),
+                    "dob": d.get("dateOfBirth", ""),
+                    "url": d.get("url", ""),
+                }
+
+        return {
+            **driver_info,
+            "driver_id": driver_id,
+            "wins": wins,
+            "podiums": podiums,
+            "poles": poles,
+            "entries": entries,
+            "championships": championships,
+        }
+
+    def search_driver_id(self, name_query: str, year: int | None = None) -> str | None:
+        """
+        Fuzzy-search Jolpica drivers by name fragment.
+        Returns the driverId (e.g. 'hamilton') or None.
+        """
+        q = name_query.lower()
+
+        def _match_driver(d: dict) -> bool:
+            full = f"{d.get('givenName', '')} {d.get('familyName', '')}".lower()
+            family = d.get("familyName", "").lower()
+            code = d.get("code", "").lower()
+            did = d.get("driverId", "").lower()
+            # Exact family name or driverId wins immediately; then substring
+            return (q == family or q == did or q == code
+                    or q in full or q in did or did in q)
+
+        try:
+            # 1. Search current-year first — handles modern drivers and avoids
+            #    historical name collisions (e.g. "hamilton" → Lewis, not Duncan).
+            current_year = datetime.now().year
+            search_year = year or current_year
+            data = self._get(f"{search_year}/drivers", ttl=3600)
+            for d in data.get("MRData", {}).get("DriverTable", {}).get("Drivers", []):
+                if _match_driver(d):
+                    return d["driverId"]
+
+            # 2. If not a current-season driver (or year specified & not found),
+            #    paginate through all 881+ historical drivers.
+            if not year:
+                offset = 0
+                while True:
+                    data = self._get("drivers", ttl=3600,
+                                     params={"limit": 100, "offset": offset})
+                    mr = data.get("MRData", {})
+                    total = int(mr.get("total", 0))
+                    batch = mr.get("DriverTable", {}).get("Drivers", [])
+                    for d in batch:
+                        if _match_driver(d):
+                            return d["driverId"]
+                    offset += len(batch)
+                    if not batch or offset >= total:
+                        break
+        except Exception:
+            pass
+        return None
+
+    # ── Per-driver race results ───────────────────────────────────────────────
+
+    def get_driver_results(self, driver_id: str, year: int) -> list[dict]:
+        """
+        Per-race results for a driver in a given season.
+        Each entry: {round, race_name, date, position, points, status, grid}
+        """
+        data = self._get(f"{year}/drivers/{driver_id}/results", ttl=300)
+        races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
+        rows = []
+        for race in races:
+            results = race.get("Results", [])
+            result = results[0] if results else {}
+            rows.append({
+                "round": int(race.get("round", 0)),
+                "race_name": race.get("raceName", ""),
+                "date": race.get("date", ""),
+                "position": result.get("position", "DNF"),
+                "points": float(result.get("points", 0) or 0),
+                "status": result.get("status", ""),
+                "grid": result.get("grid", ""),
+            })
+        return rows
+
+    def get_season_all_results(self, year: int) -> list[dict]:
+        """
+        All race results for a season — paginated to get every driver/race row.
+        A full 24-race season has ~480 rows; we paginate in 100-row chunks.
+        Each entry: {round, race_name, driver_name, constructor, position, status, points}
+        """
+        all_rows = []
+        limit = 100
+        offset = 0
+
+        while True:
+            data = self._get(
+                f"{year}/results", ttl=300,
+                params={"limit": limit, "offset": offset}
+            )
+            total = int(data.get("MRData", {}).get("total", 0))
+            races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
+            for race in races:
+                for result in race.get("Results", []):
+                    d = result.get("Driver", {})
+                    c = result.get("Constructor", {})
+                    all_rows.append({
+                        "round": int(race.get("round", 0)),
+                        "race_name": race.get("raceName", ""),
+                        "driver_name": f"{d.get('givenName','')} {d.get('familyName','')}".strip(),
+                        "constructor": c.get("name", ""),
+                        "position": result.get("position", ""),
+                        "status": result.get("status", ""),
+                        "points": float(result.get("points", 0) or 0),
+                    })
+            offset += limit
+            if offset >= total or not races:
+                break
+
+        return all_rows
+
+    def get_sprint_results(self, year: int, round_number: int | None = None) -> list[dict]:
+        """
+        Sprint race results for a season (or specific round).
+        Each entry: {round, race_name, position, driver_name, constructor, points, status}
+        """
+        if round_number:
+            data = self._get(f"{year}/{round_number}/sprint", ttl=300)
+        else:
+            data = self._get(f"{year}/sprint", ttl=300, params={"limit": 100})
+        races = data.get("MRData", {}).get("RaceTable", {}).get("Races", [])
+        rows = []
+        for race in races:
+            for result in race.get("SprintResults", []):
+                d = result.get("Driver", {})
+                c = result.get("Constructor", {})
+                rows.append({
+                    "round": int(race.get("round", 0)),
+                    "race_name": race.get("raceName", ""),
+                    "position": result.get("position", ""),
+                    "driver_name": f"{d.get('givenName','')} {d.get('familyName','')}".strip(),
+                    "constructor": c.get("name", ""),
+                    "points": float(result.get("points", 0) or 0),
+                    "status": result.get("status", ""),
+                })
+        return rows
+
+    # ── Constructor lookup ────────────────────────────────────────────────────
+
+    def search_constructor_id(self, query: str) -> str | None:
+        """Fuzzy-search Jolpica constructors by name/ID — exact match wins."""
+        data = self._get("constructors", ttl=7200, params={"limit": 200})
+        constructors = data.get("MRData", {}).get("ConstructorTable", {}).get("Constructors", [])
+
+        q = query.lower().strip()
+        q_norm = q.replace(" ", "").replace("-", "").replace("_", "")
+
+        # Pass 1: exact match on ID or name
+        for c in constructors:
+            cid = c.get("constructorId", "").lower()
+            name = c.get("name", "").lower()
+            cid_norm = cid.replace("_", "").replace("-", "")
+            name_norm = name.replace(" ", "").replace("-", "")
+            if q == cid or q == name or q_norm == cid_norm or q_norm == name_norm:
+                return c["constructorId"]
+
+        # Pass 2: query is a strict prefix/suffix of name/ID (avoids "ferrari" → "cooper-ferrari")
+        for c in constructors:
+            cid = c.get("constructorId", "").lower()
+            name = c.get("name", "").lower()
+            if name.startswith(q) or cid.startswith(q) or name.endswith(q):
+                return c["constructorId"]
+
+        # Pass 3: substring — query contained inside name/ID
+        for c in constructors:
+            cid = c.get("constructorId", "").lower()
+            name = c.get("name", "").lower()
+            cid_norm = cid.replace("_", "")
+            name_norm = name.replace(" ", "")
+            if q_norm in name_norm or q_norm in cid_norm:
+                return c["constructorId"]
+
+        # Fallback: try current-year constructors (newer teams may not be in all-time list)
+        try:
+            year = datetime.now().year
+            year_data = self._get(f"{year}/constructors", ttl=3600, params={"limit": 30})
+            year_c = year_data.get("MRData", {}).get("ConstructorTable", {}).get("Constructors", [])
+            for c in year_c:
+                cid = c.get("constructorId", "").lower()
+                name = c.get("name", "").lower()
+                if q in name or q_norm in cid.replace("_", "") or q_norm in name.replace(" ", ""):
+                    return c["constructorId"]
+        except Exception:
+            pass
+
+        return None
+
+    def get_constructor_career(self, constructor_id: str) -> dict:
+        """
+        Career totals for a constructor from Jolpica.
+        Returns: {constructor_id, name, nationality, url, championships, wins, entries}
+        """
+        # Total championship seasons (finished P1 in constructors standings)
+        champs_data = self._get(f"constructors/{constructor_id}/constructorstandings/1", ttl=3600)
+        champ_seasons = (
+            champs_data.get("MRData", {})
+                       .get("StandingsTable", {})
+                       .get("StandingsLists", [])
+        )
+        championships = len(champ_seasons)
+
+        # Total race wins
+        wins_data = self._get(f"constructors/{constructor_id}/results/1", ttl=3600)
+        wins = int(wins_data.get("MRData", {}).get("total", 0))
+
+        # Pole positions
+        try:
+            poles_data = self._get(f"constructors/{constructor_id}/qualifying/1", ttl=3600)
+            poles = int(poles_data.get("MRData", {}).get("total", 0))
+        except Exception:
+            poles = 0
+
+        # Total race entries (limit=1 to get just the total count)
+        entries_data = self._get(f"constructors/{constructor_id}/results", ttl=3600, params={"limit": 1})
+        entries = int(entries_data.get("MRData", {}).get("total", 0))
+
+        # Constructor info
+        info_data = self._get(f"constructors/{constructor_id}", ttl=3600)
+        constructors = info_data.get("MRData", {}).get("ConstructorTable", {}).get("Constructors", [])
+        info = constructors[0] if constructors else {}
+
+        return {
+            "constructor_id": constructor_id,
+            "name": info.get("name", constructor_id.replace("_", " ").title()),
+            "nationality": info.get("nationality", ""),
+            "url": info.get("url", ""),
+            "championships": championships,
+            "wins": wins,
+            "poles": poles,
+            "entries": entries,
+        }
+
+    # ── Circuit lookup ────────────────────────────────────────────────────────
+
+    def get_circuits(self, year: int | None = None) -> list[dict]:
+        """
+        Returns circuit list. If *year* is given, only circuits used that season.
+        Each entry: {circuit_id, circuit_name, locality, country, lat, long, url}
+        """
+        if year:
+            data = self._get(f"{year}/circuits", ttl=3600, params={"limit": 30})
+        else:
+            data = self._get("circuits", ttl=7200, params={"limit": 200})
+        circuits = data.get("MRData", {}).get("CircuitTable", {}).get("Circuits", [])
+        rows = []
+        for c in circuits:
+            loc = c.get("Location", {})
+            rows.append({
+                "circuit_id": c.get("circuitId", ""),
+                "circuit_name": c.get("circuitName", ""),
+                "locality": loc.get("locality", ""),
+                "country": loc.get("country", ""),
+                "lat": loc.get("lat", ""),
+                "long": loc.get("long", ""),
+                "url": c.get("url", ""),
+            })
+        return rows
+
+
+_jolpica_client: JolpicaClient | None = None
+
+
+def get_jolpica_client() -> JolpicaClient:
+    """Singleton Jolpica client."""
+    global _jolpica_client
+    if _jolpica_client is None:
+        _jolpica_client = JolpicaClient()
+    return _jolpica_client

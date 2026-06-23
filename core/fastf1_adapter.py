@@ -23,16 +23,13 @@ fastf1.Cache.enable_cache(CACHE_DIR)
 fastf1.plotting.setup_mpl()
 
 def validate_year(year: int) -> bool:
-    """Validate year is within FastF1 data range dynamically."""
-    if year < 2018:
-        return False
-    try:
-        schedule = fastf1.get_event_schedule(year)
-        return not schedule.empty
-    except fastf1.api.CacheMissError:
-        return False
-    except Exception:
-        return False
+    """Validate year is within FastF1 data range (2018 to current year)."""
+    return 2018 <= year <= datetime.datetime.now().year
+
+
+# In-memory session cache: avoids re-parsing parquet files within one agent session.
+# FastF1 disk cache already handles cross-session persistence.
+_session_cache: dict = {}
 
 def resolve_driver_name(driver_input: str, session) -> str:
     """
@@ -49,31 +46,39 @@ def validate_driver(driver: str, session) -> bool:
     return resolve_driver_name(driver, session) is not None
 
 def get_schedule(year: int):
-    """Returns the full race calendar for a specific year, including remaining races."""
+    """Returns the full race calendar for *year* as a Markdown table."""
     if not validate_year(year):
-        return f"Year {year} is out of range. FastF1 data available for 2018-2026."
-    
+        return f"Year {year} is out of range. FastF1 data available for 2018-{datetime.datetime.now().year}."
+
     try:
         schedule = fastf1.get_event_schedule(year)
-        races = schedule[schedule['EventFormat'] != 'testing']
-        
-        output = f"--- {year} F1 Schedule ---\n"
+        races = schedule[schedule['EventFormat'] != 'testing'].copy()
+
+        rows = []
         for _, row in races.iterrows():
-            round_num = row['RoundNumber']
-            date = row['EventDate'].strftime('%Y-%m-%d')
-            output += f"Round {round_num}: {row['EventName']} ({row['Location']}) - {date}\n"
-            
-        import datetime
+            rows.append({
+                "Rd": int(row['RoundNumber']),
+                "Grand Prix": row['EventName'],
+                "Location": row['Location'],
+                "Date": row['EventDate'].strftime('%Y-%m-%d'),
+            })
+
+        df = pd.DataFrame(rows)
+        output = f"## 🗓️ {year} F1 Race Calendar\n\n"
+        output += df.to_markdown(index=False)
+
         if year == datetime.datetime.now().year:
             try:
                 remaining = fastf1.get_events_remaining()
                 if not remaining.empty:
-                    output += f"\n--- Remaining Events ---\n"
-                    for _, row in remaining.iterrows():
-                         output += f"Next: {row['EventName']} starts {row['Session1Date'].strftime('%Y-%m-%d')}\n"
-            except Exception as e:
+                    next_event = remaining.iloc[0]
+                    output += (
+                        f"\n\n**Next up**: {next_event['EventName']} — "
+                        f"{next_event['Session1Date'].strftime('%d %b %Y')}"
+                    )
+            except Exception:
                 pass
-                
+
         return output
     except Exception as e:
         logger.error(f"Schedule fetch error: {e}")
@@ -84,7 +89,13 @@ def load_session(year, grand_prix, session_type):
     if not validate_year(year):
         logger.warning(f"Invalid year: {year}")
         return None
-    
+
+    # Check in-memory cache first to avoid redundant disk parquet reads
+    cache_key = (int(year), str(grand_prix).lower().strip(), str(session_type).lower().strip())
+    if cache_key in _session_cache:
+        logger.debug(f"Session cache HIT: {cache_key}")
+        return _session_cache[cache_key]
+
     st_map = {
         'race': 'R', 'r': 'R', 
         'qualifying': 'Q', 'q': 'Q', 
@@ -109,7 +120,11 @@ def load_session(year, grand_prix, session_type):
 
         grand_prix = clean_arg(grand_prix)
         session_type = clean_arg(session_type)
-        
+
+        # Normalize colloquial names ("Spa", "Monza", "Monaco GP") to official FastF1 names
+        from utils.gp_normalize import normalize_gp_name
+        grand_prix = normalize_gp_name(grand_prix)
+
         gp_clean = grand_prix.lower()
         st = session_type
         
@@ -199,6 +214,7 @@ def load_session(year, grand_prix, session_type):
             except Exception as e2:
                 logger.error(f"Minimal load also failed for {grand_prix} {st}: {e2}")
                 # Don't return None yet, the tools might still access partial data or we handle it there
+        _session_cache[cache_key] = session
         return session
 
     except Exception as e:
@@ -336,7 +352,6 @@ def get_session_results(year: int, grand_prix: str, session: str):
                 
                 output += f"| {pos} | {fullname} | {team} | **{points}** | {status} |\n"
             
-        output += "\n[CRITICAL NOTE FOR AGENT: DO NOT SUMMARIZE THE TABLE ABOVE. RETURN IT VERBATIM WITH ALL COLUMNS.]"
         if res.empty:
             if laps.empty:
                 output += "\n\nNOTE: Could not load any data for this session. This may be due to a network issue, missing data on the server, or the session hasn't happened yet."
@@ -426,44 +441,48 @@ def get_sector_analysis(year: int, grand_prix: str, session: str, driver1: str, 
     """Sector-by-sector performance comparison."""
     session_obj = load_session(year, grand_prix, session)
     if not session_obj: return "Session not found."
-    
+
     try:
         d1_abbr = resolve_driver_name(driver1, session_obj)
+        if not d1_abbr:
+            return f"Driver '{driver1}' not found in this session."
         l1 = session_obj.laps.pick_drivers(d1_abbr).pick_fastest()
-        
+        if l1.empty:
+            return f"No valid fastest lap found for {d1_abbr} (possible DNF on lap 1)."
+
         output = f"--- Sector Analysis: {grand_prix} {year} ({session}) ---\n\n"
-        
+
         def fmt_sector(t):
             if pd.isnull(t): return "N/A"
-            # Format as SS.mmm
-            total_seconds = t.total_seconds()
-            return f"{total_seconds:.3f}s"
-        
+            return f"{t.total_seconds():.3f}s"
+
         def fmt_lap(t):
             if pd.isnull(t): return "N/A"
-            # Format as M:SS.mmm
             total_seconds = t.total_seconds()
             minutes = int(total_seconds // 60)
             seconds = total_seconds % 60
             return f"{minutes}:{seconds:06.3f}"
-        
+
         output += f"{d1_abbr} Best Lap: {fmt_lap(l1['LapTime'])}\n"
         output += f"S1: {fmt_sector(l1['Sector1Time'])} | S2: {fmt_sector(l1['Sector2Time'])} | S3: {fmt_sector(l1['Sector3Time'])}\n\n"
-        
+
         if driver2:
             d2_abbr = resolve_driver_name(driver2, session_obj)
+            if not d2_abbr:
+                return output + f"Driver '{driver2}' not found in this session."
             l2 = session_obj.laps.pick_drivers(d2_abbr).pick_fastest()
+            if l2.empty:
+                return output + f"No valid fastest lap found for {d2_abbr}."
             output += f"{d2_abbr} Best Lap: {fmt_lap(l2['LapTime'])}\n"
             output += f"S1: {fmt_sector(l2['Sector1Time'])} | S2: {fmt_sector(l2['Sector2Time'])} | S3: {fmt_sector(l2['Sector3Time'])}\n"
-            
-            # Deltas
+
             s1_d = l1['Sector1Time'] - l2['Sector1Time']
             s2_d = l1['Sector2Time'] - l2['Sector2Time']
             s3_d = l1['Sector3Time'] - l2['Sector3Time']
-            
+
             output += f"\nDelta ({d1_abbr} vs {d2_abbr}):\n"
             output += f"S1: {s1_d.total_seconds():+.3f}s | S2: {s2_d.total_seconds():+.3f}s | S3: {s3_d.total_seconds():+.3f}s\n"
-            
+
         return output
     except Exception as e:
         return f"Sector analysis error: {e}"

@@ -21,10 +21,12 @@ async def f1_predict_tire_life(
     Use when user asks: "How are Verstappen's tires?", "Tire deg for Hamilton", "Is his pace dropping?"
     """
     try:
+        from tools.live_tools import verify_live_session
         client = get_enhanced_client()
         if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
-            
+            session = await verify_live_session(client, "latest")
+            session_key = session['session_key']
+
         # Fetch laps
         laps_data = await client.get_laps_async(session_key, driver_number)
         if not laps_data:
@@ -99,10 +101,12 @@ async def f1_predict_overtake(
     Use when user asks: "Will Lewis catch Max?", "When will the overtake happen?", "Gap analysis"
     """
     try:
+        from tools.live_tools import verify_live_session
         client = get_enhanced_client()
         if session_key == "latest":
-            session_key = await client.get_latest_session_key_async()
-            
+            session = await verify_live_session(client, "latest")
+            session_key = session['session_key']
+
         # 1. Get current interval/gap
         intervals = await client.get_intervals_async(session_key)
         df_int = pd.DataFrame(intervals)

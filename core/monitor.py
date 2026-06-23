@@ -32,7 +32,13 @@ class LiveRaceMonitor:
     async def start_monitoring(self, session_key: str = "latest"):
         """Start live race monitoring"""
         if session_key == "latest":
-            self.session_key = await self.client.get_latest_session_key_async()
+            from tools.live_tools import verify_live_session
+            try:
+                session = await verify_live_session(self.client, "latest")
+                self.session_key = str(session['session_key'])
+            except Exception as e:
+                console.print(f"[red]No active session found: {e}[/red]")
+                return
         else:
             self.session_key = session_key
             
@@ -236,25 +242,46 @@ class LiveRaceMonitor:
         return events
     
     async def detect_fastest_laps(self) -> List[Dict]:
-        """Detect new fastest laps"""
+        """Detect new fastest laps by comparing most recent completed lap to session best."""
         events = []
         try:
             laps = await self.client.get_laps_async(self.session_key)
-            if not laps: return []
-            
+            if not laps:
+                return []
+
             df = pd.DataFrame(laps)
-            if df.empty: return []
-            
-            # Get recent laps
-            recent = df.sort_values('date').tail(20)
-            
-            # Check for fastest lap flags (assuming 'is_personal_best' or similar logic available)
-            # Simplification: just check if any recent lap is faster than all previous?
-            # Or rely on a known flag. FastF1 doesn't always have 'is_personal_best'.
-            # We'll skip complex logic for now and just look for purple laps if available
-            # or just log very fast laps
-            pass 
-                
+            if df.empty or 'lap_duration' not in df.columns:
+                return []
+
+            df = df.dropna(subset=['lap_duration'])
+            df['lap_duration'] = pd.to_numeric(df['lap_duration'], errors='coerce')
+            df = df.dropna(subset=['lap_duration'])
+
+            if df.empty:
+                return []
+
+            session_best = df['lap_duration'].min()
+
+            # Look at the 5 most recent laps for any new overall fastest
+            recent = df.sort_values('date_start').tail(5) if 'date_start' in df.columns else df.tail(5)
+
+            for _, row in recent.iterrows():
+                duration = float(row['lap_duration'])
+                driver = row.get('driver_number', '?')
+                mins = int(duration // 60)
+                secs = duration % 60
+
+                if duration <= session_best:
+                    events.append({
+                        "type": "fastest_lap",
+                        "severity": "high",
+                        "message": (
+                            f"💜 FASTEST LAP! Driver #{driver} "
+                            f"{mins}:{secs:06.3f}"
+                        ),
+                        "timestamp": datetime.now()
+                    })
+
         except Exception:
             pass
         return events
@@ -272,18 +299,23 @@ class LiveRaceMonitor:
             if intervals:
                 df = pd.DataFrame(intervals)
                 if not df.empty:
-                    latest = df.sort_values('date').groupby('driver_number').tail(1)
-                    latest = latest.sort_values('interval')
-                    
+                    latest = df.sort_values('date').groupby('driver_number').tail(1).copy()
+                    latest['_pos_num'] = pd.to_numeric(latest['position'], errors='coerce').fillna(99)
+                    latest = latest.sort_values('_pos_num')
+
                     for _, row in latest.head(20).iterrows():
                         pos = row.get('position', '?')
                         driver = f"#{row['driver_number']}"
-                        gap = f"+{row.get('gap_to_leader', 0):.3f}s"
-                        
                         try:
-                            interval_val = float(row.get('interval', 0))
-                            interval = f"{interval_val:.3f}s"
-                        except:
+                            gap_val = float(row.get('gap_to_leader', 0) or 0)
+                            gap = "LEADER" if gap_val == 0 else f"+{gap_val:.3f}s"
+                        except (ValueError, TypeError):
+                            gap = str(row.get('gap_to_leader', 'N/A'))
+
+                        try:
+                            interval_val = float(row.get('interval', 0) or 0)
+                            interval = "—" if interval_val == 0 else f"+{interval_val:.3f}s"
+                        except (ValueError, TypeError):
                             interval = str(row.get('interval', 'N/A'))
                         
                         table.add_row(str(pos), driver, gap, interval)

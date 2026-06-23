@@ -11,11 +11,13 @@ load_dotenv()
 
 # === API Configuration ===
 OPENF1_BASE_URL = "https://api.openf1.org/v1"
+# Jolpica: community-maintained Ergast mirror with current-season data
+JOLPICA_BASE_URL = "https://api.jolpi.ca/ergast/f1"
 API_TIMEOUT = 30
-API_MAX_RETRIES = 1
+API_MAX_RETRIES = 3
 
 # === Data Configuration ===
-DATA_DEFAULT_YEAR = 2025
+DATA_DEFAULT_YEAR = datetime.now().year
 MIN_REPLAY_YEAR = 2018  # Telemetry data availability
 
 # === Directory Structure ===
@@ -29,25 +31,20 @@ LOG_FILE = "f1_agent.log"
 FASTF1_MIN_YEAR = 2018
 FASTF1_MAX_YEAR = datetime.now().year
 
-# === UI Configuration ===
-SCREEN_WIDTH = 1400
-SCREEN_HEIGHT = 900
-FPS = 30
-
 # === LLM Configuration ===
-# LLM_PROVIDER: "ollama" (local, default) or "gemini" (cloud fallback, needs GEMINI_API_KEY)
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
+# LLM_PROVIDER: "gemini" (cloud, preferred when key is set) or "ollama" (local fallback)
+# Auto-detects: if GEMINI_API_KEY is present, uses Gemini Flash by default.
+# Override with LLM_PROVIDER=ollama in .env to force local model.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+_default_provider = "gemini" if GEMINI_API_KEY else "ollama"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", _default_provider).lower()
 LLM_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 LLM_TEMPERATURE = 0.3
 
 # === Logging Configuration ===
 LOG_LEVEL = "INFO"
 LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
-
-# === API Keys ===
-TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
 # === Date ===
 TODAY = datetime.now().strftime("%Y-%m-%d")

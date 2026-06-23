@@ -7,7 +7,6 @@ import threading
 from langchain_core.tools import tool
 from config.settings import DATA_DEFAULT_YEAR, MIN_REPLAY_YEAR
 from core.fastf1_adapter import prepare_replay_data
-from replay_ui import run_replay_threaded
 from rich.console import Console
 
 logger = logging.getLogger("ReplayTools")
@@ -55,6 +54,14 @@ async def f1_race_replay(
 
         # 2. Launch Arcade Window in separate thread
         # This keeps the agent responsive while you watch the replay
+        try:
+            from replay_ui import run_replay_threaded
+        except ImportError:
+            return (
+                "Replay requires 'arcade' to be installed and a graphical display.\n"
+                "Install with: pip install arcade\n"
+                "Note: replay is not available in headless/SSH environments."
+            )
         run_replay_threaded(ui_data)
         
         return f"🏁 Replay launched for {grand_prix} {year}! Check the popup window.\n(Controls: Space=Pause, Arrows=Seek/Speed, L=Toggle Names)"

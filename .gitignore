@@ -61,6 +61,17 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+cache/agent_memory.db
+
+# Generated conversations
+f1_conversation_*.md
+
+# Mypy
+.mypy_cache/
+*.pyi
+
+# Ruff
+.ruff_cache/
 
 # Jupyter
 .ipynb_checkpoints/

@@ -13,11 +13,14 @@ import pandas as pd
 from functools import lru_cache
 from datetime import datetime
 import wikipedia
-from fastf1.ergast import Ergast
 from langchain_core.tools import tool
 
+from config.settings import PLOTS_DIR
+
+# Wikipedia blocks the default library UA; set a descriptive one
+wikipedia.set_user_agent("F1Agent/1.0 (educational F1 data tool; python-requests)")
+
 logger = logging.getLogger("ReferenceTools")
-ergast = Ergast()
 
 
 @lru_cache(maxsize=100)
@@ -30,36 +33,6 @@ def _cached_wikipedia_search(query: str, results: int = 5) -> tuple:
 def _cached_wikipedia_page(title: str):
     """Cached Wikipedia page fetch to avoid redundant API calls"""
     return wikipedia.page(title, auto_suggest=False)
-
-
-@lru_cache(maxsize=50)
-def _get_cached_driver_standings(year: int):
-    """Cached Ergast driver standings"""
-    return ergast.get_driver_standings(season=year)
-
-
-@lru_cache(maxsize=50)
-def _get_cached_constructor_standings(year: int):
-    """Cached Ergast constructor standings"""
-    return ergast.get_constructor_standings(season=year)
-
-
-@lru_cache(maxsize=50)
-def _get_cached_race_results(year: int):
-    """Cached Ergast race results"""
-    return ergast.get_race_results(season=year)
-
-
-@lru_cache(maxsize=20)
-def _get_cached_qualifying_results(year: int):
-    """Cached Ergast qualifying results"""
-    return ergast.get_qualifying_results(season=year)
-
-
-@lru_cache(maxsize=100)
-def _get_cached_driver_info(driver_id: str):
-    """Cached Ergast driver info"""
-    return ergast.get_driver_info(driver=driver_id)
 
 
 def extract_list_content(page, query: str) -> str:
@@ -296,227 +269,106 @@ async def f1_champions_quick_lookup(year_filter: str = "") -> str:
 
 
 @tool
-async def f1_season_race_winners(year: int = 2024) -> str:
+async def f1_season_race_winners(year: int = 0) -> str:
     """
-    Returns a list of ALL race winners for a specific F1 season using API data.
-    Faster and more lightweight than full session loads.
-    
+    Returns a list of ALL race winners for a specific F1 season.
+    Data comes from the Jolpica REST API — real-time, no scraping.
+
     Args:
-        year: The F1 season year (default: 2024)
+        year: The F1 season year (0 = current year)
     """
+    from utils.async_tools import get_async_wrapper
+    from datetime import datetime as _dt
+    from core.api_client import get_jolpica_client
+
+    year = year or _dt.now().year
+    wrapper = get_async_wrapper()
+
     try:
-        from utils.async_tools import get_async_wrapper
-        wrapper = get_async_wrapper()
-
-        def fetch_winners_wiki():
-            url = f"https://en.wikipedia.org/wiki/{year}_Formula_One_World_Championship"
-            headers = {'User-Agent': 'F1Agent/1.0'}
-            response = requests.get(url, headers=headers, timeout=10)
-            tables = pd.read_html(io.StringIO(response.text))
-            
-            results_table = None
-            for t in tables:
-                cols_str = str(t.columns).lower()
-                if 'grand prix' in cols_str and any(kw in cols_str for kw in ['winning driver', 'winner']):
-                    results_table = t
-                    break
-            
-            if results_table is None:
-                return []
-
-            df = results_table.copy()
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [' '.join(dict.fromkeys(col)).strip() for col in df.columns.values]
-            
-            # Fuzzy column identification
-            cols = list(df.columns)
-            def find_col(keywords, exclude=None):
-                for c in cols:
-                    if any(k in c.lower() for k in keywords):
-                        if exclude and any(e in c.lower() for e in exclude): continue
-                        return c
-                return None
-
-            col_map = {
-                'Rd': find_col(['round', 'no.']),
-                'Grand Prix': find_col(['grand prix']),
-                'Winner': find_col(['winner', 'winning driver']),
-                'Team': find_col(['constructor', 'team']),
-                'Pole': find_col(['pole position', 'pole'])
-            }
-            
-            summary = []
-            # Filter rows that look like race data (usually first col has a number)
-            # Some tables have a nested round structure, we just need the rows
-            valid_rows = df[df.iloc[:, 0].astype(str).str.contains(r'\d+')].copy()
-            
-            for _, row in valid_rows.iterrows():
-                try:
-                    rd = row[col_map['Rd']] if col_map['Rd'] else "N/A"
-                    gp = row[col_map['Grand Prix']] if col_map['Grand Prix'] else "N/A"
-                    winner = row[col_map['Winner']] if col_map['Winner'] else "N/A"
-                    team = row[col_map['Team']] if col_map['Team'] else "N/A"
-                    pole = row[col_map['Pole']] if col_map['Pole'] else "N/A"
-                    
-                    winner = str(winner).replace(r'\[.*\]', '').strip()
-                    gp = str(gp).replace(r'\[.*\]', '').strip()
-                    team = str(team).replace(r'\[.*\]', '').strip()
-                    pole = str(pole).replace(r'\[.*\]', '').strip()
-                    
-                    if winner.lower() in ['nan', 'none', '']: continue
-                    
-                    summary.append({
-                        "Rd": rd,
-                        "🏁 Grand Prix": gp,
-                        "🏆 Winner": winner,
-                        "🏎️ Team": team,
-                        "🅿️ Pole": pole
-                    })
-                except: continue
-            return summary
-
-        winners = await wrapper.run_sync_tool(fetch_winners_wiki)
-        
-        if not winners:
-            # Final fallback to Ergast only if Wikipedia fails
-            def fetch_ergast_fallback():
-                try:
-                    results = _get_cached_race_results(year)
-                    summary = []
-                    for i, race_desc in results.description.iterrows():
-                        try:
-                            race_results = results.content[i]
-                            if not race_results.empty:
-                                winner = race_results.iloc[0]
-                                summary.append({
-                                    "Rd": race_desc['round'],
-                                    "🏁 Grand Prix": race_desc['raceName'],
-                                    "🏆 Winner": f"{winner['givenName']} {winner['familyName']}",
-                                    "🏎️ Team": winner['constructorName'],
-                                    "🅿️ Pole": "N/A"
-                                })
-                        except: continue
-                    return summary
-                except: return []
-            winners = await wrapper.run_sync_tool(fetch_ergast_fallback)
-
-        if not winners:
-            return f"No race results found for the {year} season."
-            
-        return f"## 🏎️ {year} F1 Season Overview\n\n" + pd.DataFrame(winners).to_markdown(index=False)
+        races = await wrapper.run_sync_tool(
+            lambda: get_jolpica_client().get_race_winners(year)
+        )
     except Exception as e:
-        logger.error(f"Season winners fetch failed: {e}")
-        return f"Error: {e}"
+        logger.error(f"Jolpica race winners fetch failed: {e}")
+        return f"Could not fetch {year} race winners: {e}"
+
+    if not races:
+        return f"No race results found for the {year} season yet."
+
+    rows = [
+        {
+            "Rd": r["round"],
+            "Grand Prix": r["race_name"],
+            "Date": r["date"],
+            "Winner": r["winner"],
+            "Team": r["team"],
+        }
+        for r in races
+    ]
+    return f"## 🏎️ {year} F1 Season Race Winners\n*(Source: api.jolpi.ca — live data)*\n\n" + pd.DataFrame(rows).to_markdown(index=False)
 
 
 @tool
 async def f1_driver_career_summary(driver_query: str) -> str:
     """
-    Fetches detailed career statistics for any F1 driver (past or present).
-    Includes total wins, poles, podiums, and championships.
-    
+    Fetches career statistics for any F1 driver (past or present) from Jolpica.
+    Includes total wins, poles, podiums, race starts and championships.
+
     Args:
-        driver_query: Driver name (e.g., 'Senna', 'Hamilton', 'Schumacher')
+        driver_query: Driver name or partial name (e.g., 'Senna', 'Hamilton', 'nor')
     """
+    from utils.async_tools import get_async_wrapper
+    from core.api_client import get_jolpica_client
+
+    wrapper = get_async_wrapper()
+
+    def fetch():
+        jolpica = get_jolpica_client()
+        # Resolve driver name → Jolpica driverId (search current + all-time)
+        driver_id = jolpica.search_driver_id(driver_query)
+        if not driver_id:
+            # Try year-scoped search (handles rookies not in all-time list)
+            from datetime import datetime as _dt
+            driver_id = jolpica.search_driver_id(driver_query, year=_dt.now().year)
+        if not driver_id:
+            return None
+        return jolpica.get_driver_career(driver_id)
+
     try:
-        from utils.async_tools import get_async_wrapper
-        wrapper = get_async_wrapper()
-
-        def fetch_career():
-            # First, find the driver ID
-            driver_info = ergast.get_driver_info(driver=driver_query)
-            logger.info(f"Driver info for '{driver_query}': empty={driver_info.empty}")
-            if driver_info.empty:
-                return None
-            
-            driver = driver_info.iloc[0]
-            d_id = driver['driverId']
-            logger.info(f"Using driver ID: {d_id}")
-            
-            # Fetch full history with Multi-page support (Ergast limit is usually 30-100)
-            def fetch_all(method, **kwargs):
-                all_content = []
-                offset = 0
-                limit = 100
-                while True:
-                    res = method(limit=limit, offset=offset, **kwargs)
-                    if not hasattr(res, 'content') or not res.content:
-                        break
-                    all_content.extend(res.content)
-                    if len(all_content) >= res.total_results:
-                        break
-                    offset += limit
-                return all_content
-
-            results_content = fetch_all(ergast.get_race_results, driver=d_id)
-            qualy_content = fetch_all(ergast.get_qualifying_results, driver=d_id)
-            
-            # Aggregate stats
-            wins, podiums = 0, 0
-            for r in results_content:
-                if not r.empty:
-                    race_pos = pd.to_numeric(r['position'], errors='coerce')
-                    wins += (race_pos == 1).sum()
-                    podiums += (race_pos <= 3).sum()
-            
-            poles = 0
-            for q in qualy_content:
-                if not q.empty:
-                    q_pos = pd.to_numeric(q['position'], errors='coerce')
-                    poles += (q_pos == 1).sum()
-            
-            # Championships - more efficient lookup using unique seasons from results
-            titles = 0
-            seasons = set()
-            for r in results_content:
-                if 'season' in r.columns:
-                    seasons.update(r['season'].unique())
-            
-            for s in sorted(seasons, reverse=True):
-                try:
-                    s_standings = _get_cached_driver_standings(int(s))
-                    if hasattr(s_standings, 'content') and s_standings.content:
-                        top = s_standings.content[0].iloc[0]
-                        if top['driverId'] == d_id:
-                            titles += 1
-                except: continue
-            
-            return {
-                "name": f"{driver['givenName']} {driver['familyName']}",
-                "nationality": driver['driverNationality'],
-                "dob": driver['dateOfBirth'],
-                "titles": titles,
-                "wins": int(wins),
-                "poles": int(poles),
-                "podiums": int(podiums),
-                "entries": sum(len(r) for r in results_content),
-                "url": driver['driverUrl']
-            }
-            logger.info(f"Career summary result: {res_data['name']}, {res_data['titles']} titles")
-            return res_data
-
-        stats = await wrapper.run_sync_tool(fetch_career)
-        
-        if not stats:
-            return f"Could not find career data for driver: {driver_query}"
-            
-        res = f"## 🏁 Driver Career Profile: {stats['name']}\n\n"
-        res += f"- **Nationality**: {stats['nationality']}\n"
-        res += f"- **Born**: {stats['dob']}\n\n"
-        
-        res += "| Category | Total |\n"
-        res += "| :--- | :--- |\n"
-        res += f"| 🏆 Championships | **{stats['titles']}** |\n"
-        res += f"| 🥇 Race Wins | **{stats['wins']}** |\n"
-        res += f"| 🅿️ Pole Positions | **{stats['poles']}** |\n"
-        res += f"| 🥉 Podiums | **{stats['podiums']}** |\n"
-        res += f"| 🚩 Race Starts | **{stats['entries']}** |\n\n"
-        
-        res += f"[Full Biography]({stats['url']})"
-        return res
+        stats = await wrapper.run_sync_tool(fetch)
     except Exception as e:
         logger.error(f"Career summary failed: {e}")
-        return f"Error: {e}"
+        return f"Error fetching career data: {e}"
+
+    if not stats or not stats.get("name"):
+        return f"Could not find career data for driver: '{driver_query}'. Try the driver's last name or Jolpica ID (e.g. 'hamilton', 'max_verstappen')."
+
+    entries = stats.get("entries", 0) or 0
+    wins = stats.get("wins", 0) or 0
+    dob_year = int(stats.get("dob", "1990")[:4]) if stats.get("dob") else 1990
+    is_historical = dob_year < 1970  # pre-1990 era drivers; qualifying data sparse
+    poles_note = " \\*" if is_historical else ""
+    win_rate = f"{wins / entries * 100:.1f}%" if entries > 0 else "N/A"
+
+    res = f"## 🏁 Driver Career Profile: {stats['name']}\n\n"
+    if stats.get("nationality"):
+        res += f"- **Nationality**: {stats['nationality']}\n"
+    if stats.get("dob"):
+        res += f"- **Born**: {stats['dob']}\n"
+    res += "\n"
+    res += "| Category | Total |\n"
+    res += "| :--- | :--- |\n"
+    res += f"| 🏆 Championships | **{stats['championships']}** |\n"
+    res += f"| 🥇 Race Wins | **{wins}** |\n"
+    res += f"| 🥈 Podiums | **{stats.get('podiums', 'N/A')}** |\n"
+    res += f"| 🅿️ Pole Positions | **{stats['poles']}{poles_note}** |\n"
+    res += f"| 🚩 Race Starts | **{entries}** |\n"
+    res += f"| 📈 Win Rate | **{win_rate}** |\n\n"
+    if is_historical:
+        res += "_\\* Historical qualifying data may be incomplete in the Jolpica database._\n\n"
+    if stats.get("url"):
+        res += f"[Full Biography]({stats['url']})"
+    return res
 
 
 @tool
@@ -532,15 +384,22 @@ async def f1_all_time_records(category: str = "wins") -> str:
         category: One of "wins", "poles", "titles", "podiums"
     """
     cat = category.lower().strip()
+    # Normalise aliases
+    if cat in ("fastest_lap", "fastestlap", "fastest laps", "fastest_laps"):
+        cat = "fastest_laps"
     mapping = {
-        "wins": {"search": ["wins", "starts"], "primary": "wins", "ham_val": 100},
-        "poles": {"search": ["pole", "entries"], "primary": "pole", "ham_val": 100},
-        "podiums": {"search": ["podiums", "starts"], "primary": "podium", "ham_val": 150},
-        "titles": {"search": ["titles", "seasons"], "primary": "titles", "schu_val": 7}
+        "wins":         {"search": ["wins", "starts"],    "primary": "wins",    "ham_val": 100},
+        "poles":        {"search": ["pole", "entries"],   "primary": "pole",    "ham_val": 100},
+        "podiums":      {"search": ["podiums", "starts"], "primary": "podium",  "ham_val": 150},
+        "titles":       {"search": ["titles", "seasons"], "primary": "titles",  "schu_val": 7},
+        "fastest_laps": {"search": ["fastest", "laps"],   "primary": "fastest", "ham_val": 30},
     }
-    
+
     if cat not in mapping:
-        return f"Error: Category '{category}' not supported. Use 'wins', 'poles', 'titles', or 'podiums'."
+        return (
+            f"Error: Category '{category}' not supported. "
+            "Use 'wins', 'poles', 'titles', 'podiums', or 'fastest_laps'."
+        )
 
     cache_dir = "cache"
     cache_file = os.path.join(cache_dir, "f1_records_v6.json")
@@ -634,163 +493,188 @@ async def f1_all_time_records(category: str = "wins") -> str:
 async def f1_reliability_analysis(year: int, driver_query: str = "") -> str:
     """
     Analyzes car reliability and race finishing statuses (DNFs, Mechanicals).
-    
+    Data comes from Jolpica — real-time, no scraping.
+
     Args:
         year: Season year
-        driver_query: Optional driver name to focus on
+        driver_query: Optional driver name to focus on (e.g., 'Norris', 'Hamilton')
     """
-    try:
-        from utils.async_tools import get_async_wrapper
-        wrapper = get_async_wrapper()
+    from utils.async_tools import get_async_wrapper
+    from core.api_client import get_jolpica_client
+    import collections
 
-        def analyze():
-            params = {"season": year}
-            if driver_query:
-                # Find driver ID first
-                d_info = ergast.get_driver_info(driver=driver_query)
-                if d_info.content:
-                    params["driver"] = d_info.content[0].iloc[0]['driverId']
-            
-            results = ergast.get_race_results(**params)
-            if results.content is None or len(results.content) == 0:
-                return None
-            
-            # Flatten all results
-            all_results = pd.concat(results.content)
-            
-            # Analyze status codes
-            status_counts = all_results['status'].value_counts()
-            
-            # Filter for non-Finished statuses
-            dnfs = status_counts[status_counts.index != 'Finished']
-            # Also exclude '+1 Lap', '+2 Laps' etc
-            dnfs = dnfs[~dnfs.index.str.contains(r'\+\d+\s+Lap')]
-            
-            return {
-                "total_starts": len(all_results),
-                "finished": status_counts.get('Finished', 0),
-                "dnf_data": dnfs.to_dict()
-            }
+    wrapper = get_async_wrapper()
 
-        data = await wrapper.run_sync_tool(analyze)
-        
-        if not data:
-            return f"No reliability data found for {year}."
-            
-        res = f"## 🛠️ Reliability Analysis: {year} Season\n\n"
-        res += f"- **Total Race Starts**: {data['total_starts']}\n"
-        res += f"- **Classified Finishes**: {data['finished']}\n"
-        res += f"- **Reliability Rate**: {(data['finished']/data['total_starts'])*100:.1f}%\n\n"
-        
-        if data['dnf_data']:
-            res += "### ⛔ DNF Reasons (Mechanical & Incidents)\n\n"
-            dnf_df = pd.DataFrame(list(data['dnf_data'].items()), columns=["Status", "Count"])
-            res += dnf_df.to_markdown(index=False)
+    def analyze():
+        jolpica = get_jolpica_client()
+        if driver_query:
+            driver_id = jolpica.search_driver_id(driver_query) or jolpica.search_driver_id(driver_query, year=year)
+            if not driver_id:
+                return None, f"Driver '{driver_query}' not found."
+            results = jolpica.get_driver_results(driver_id, year)
         else:
-            res += "Perfect reliability! No DNFs recorded."
-            
-        return res
+            results = jolpica.get_season_all_results(year)
+        return results, None
+
+    try:
+        results, error = await wrapper.run_sync_tool(analyze)
     except Exception as e:
         logger.error(f"Reliability analysis failed: {e}")
         return f"Error: {e}"
 
+    if error:
+        return error
+    if not results:
+        return f"No reliability data found for {year}."
+
+    import collections
+
+    def _is_finish(status: str) -> bool:
+        return status == "Finished" or bool(re.match(r'\+\d+ Lap', status))
+
+    status_counts = collections.Counter(r["status"] for r in results)
+    total = len(results)
+    finished = sum(v for k, v in status_counts.items() if _is_finish(k))
+    dnfs = {k: v for k, v in status_counts.items() if not _is_finish(k) and k}
+
+    scope = f" — {driver_query.title()}" if driver_query else ""
+    res = f"## 🛠️ Reliability Analysis: {year} Season{scope}\n\n"
+    res += f"- **Total Race Starts**: {total}\n"
+    res += f"- **Classified Finishes**: {finished}\n"
+    if total:
+        res += f"- **Reliability Rate**: {finished/total*100:.1f}%\n"
+    res += "\n"
+
+    if dnfs:
+        res += "### ⛔ DNF Reasons\n\n"
+        dnf_df = pd.DataFrame(
+            sorted(dnfs.items(), key=lambda x: -x[1]),
+            columns=["Status", "Count"]
+        )
+        res += dnf_df.to_markdown(index=False)
+    else:
+        res += "Perfect reliability — no DNFs recorded."
+
+    # Season-wide view: add per-team breakdown
+    if not driver_query:
+        team_stats: dict = collections.defaultdict(lambda: {"total": 0, "finished": 0, "dnfs": 0})
+        for r in results:
+            team = r.get("team", r.get("driver", "Unknown"))
+            team_stats[team]["total"] += 1
+            if _is_finish(r.get("status", "")):
+                team_stats[team]["finished"] += 1
+            else:
+                team_stats[team]["dnfs"] += 1
+
+        rows = []
+        for team, s in sorted(team_stats.items(), key=lambda x: x[0]):
+            t = s["total"]
+            f_ = s["finished"]
+            rows.append({
+                "Team": team,
+                "Starts": t,
+                "Finished": f_,
+                "DNFs": s["dnfs"],
+                "Rate": f"{f_/t*100:.0f}%" if t else "N/A",
+            })
+        if rows:
+            res += "\n\n### 🏎️ Per-Team Breakdown\n\n"
+            res += pd.DataFrame(rows).to_markdown(index=False)
+
+    return res
+
 
 @tool
-async def f1_head_to_head(driver1: str, driver2: str, year: int = 2024) -> str:
+async def f1_head_to_head(driver1: str, driver2: str, year: int = 0) -> str:
     """
-    Head-to-head comparison between ANY two F1 drivers in a season (Rivals or Teammates).
-    Compares race results, finish counts, and head-to-head wins.
-    
+    Head-to-head comparison between ANY two F1 drivers in a season.
+    Compares race finish positions, race-by-race results, and head-to-head wins.
+    Data comes from Jolpica — real-time, no scraping.
+
     Args:
         driver1: Name of first driver (e.g. 'Norris', 'Verstappen')
         driver2: Name of second driver
-        year: Season year (default: 2024)
+        year: Season year (0 = current year)
     """
+    from utils.async_tools import get_async_wrapper
+    from core.api_client import get_jolpica_client
+    from datetime import datetime as _dt
+
+    year = year or _dt.now().year
+    wrapper = get_async_wrapper()
+
+    def compare():
+        jolpica = get_jolpica_client()
+        id1 = jolpica.search_driver_id(driver1) or jolpica.search_driver_id(driver1, year=year)
+        id2 = jolpica.search_driver_id(driver2) or jolpica.search_driver_id(driver2, year=year)
+        if not id1:
+            return None, f"Could not find driver: '{driver1}'. Try the last name or Jolpica ID."
+        if not id2:
+            return None, f"Could not find driver: '{driver2}'. Try the last name or Jolpica ID."
+
+        r1 = jolpica.get_driver_results(id1, year)
+        r2 = jolpica.get_driver_results(id2, year)
+        if not r1:
+            return None, f"No {year} race data for '{driver1}'."
+        if not r2:
+            return None, f"No {year} race data for '{driver2}'."
+
+        d1_map = {r["round"]: r for r in r1}
+        d2_map = {r["round"]: r for r in r2}
+        common = sorted(set(d1_map) & set(d2_map))
+
+        d1_name = id1.replace("_", " ").title()
+        d2_name = id2.replace("_", " ").title()
+        d1_ahead = d2_ahead = 0
+        rows = []
+        for rnd in common:
+            p1 = d1_map[rnd]["position"]
+            p2 = d2_map[rnd]["position"]
+            try:
+                if int(p1) < int(p2):
+                    d1_ahead += 1
+                elif int(p2) < int(p1):
+                    d2_ahead += 1
+            except (ValueError, TypeError):
+                pass
+            rows.append({
+                "Round": rnd,
+                "Race": d1_map[rnd]["race_name"],
+                d1_name: p1,
+                d2_name: p2,
+            })
+
+        return {
+            "id1": d1_name, "id2": d2_name,
+            "d1_ahead": d1_ahead, "d2_ahead": d2_ahead,
+            "total": len(common), "rows": rows,
+        }, None
+
     try:
-        from utils.async_tools import get_async_wrapper
-        wrapper = get_async_wrapper()
-
-        def compare():
-            # Resolve driver names to IDs if needed
-            all_drivers = ergast.get_driver_info(season=year)
-            
-            def get_id(query):
-                if not all_drivers.empty:
-                    q = query.lower()
-                    for _, d in all_drivers.iterrows():
-                        did = d['driverId'].lower()
-                        dfam = d['familyName'].lower()
-                        dcode = str(d.get('driverCode', '')).lower()
-                        # Match if exact or if our known identifiers are in the query (e.g. 'Hamilton' in 'Lewis Hamilton')
-                        if (q == did or q == dfam or q == dcode or 
-                            dfam in q or did in q):
-                            return d['driverId']
-                
-                # Final fallback
-                try:
-                    info = ergast.get_driver_info(driver=query)
-                    return info.iloc[0]['driverId'] if not info.empty else query
-                except:
-                    return query
-
-            id1 = get_id(driver1)
-            id2 = get_id(driver2)
-            
-            # Get data for both
-            d1_results = ergast.get_race_results(season=year, driver=id1)
-            d2_results = ergast.get_race_results(season=year, driver=id2)
-            
-            if not d1_results.content or not d2_results.content:
-                return f"Could not find sufficient data for both {driver1} and {driver2} in {year}."
-            
-            # Map round -> position
-            d1_data = {row['round']: d1_results.content[i].iloc[0]['position'] 
-                       for i, row in d1_results.description.iterrows() 
-                       if not d1_results.content[i].empty}
-            d2_data = {row['round']: d2_results.content[i].iloc[0]['position'] 
-                       for i, row in d2_results.description.iterrows() 
-                       if not d2_results.content[i].empty}
-            
-            common_rounds = set(d1_data.keys()).intersection(set(d2_data.keys()))
-            
-            d1_ahead = 0
-            d2_ahead = 0
-            
-            for rnd in common_rounds:
-                p1 = int(d1_data[rnd])
-                p2 = int(d2_data[rnd])
-                if p1 < p2: d1_ahead += 1
-                elif p2 < p1: d2_ahead += 1
-            
-            return {
-                "d1": id1.replace('_', ' ').title(),
-                "d2": id2.replace('_', ' ').title(),
-                "d1_ahead": d1_ahead,
-                "d2_ahead": d2_ahead,
-                "total": len(common_rounds)
-            }
-
-        data = await wrapper.run_sync_tool(compare)
-        if isinstance(data, str): return data
-        
-        # Enhanced result presentation for the user
-        res = f"### 🏎️  F1 Head-to-Head: {data['d1']} vs {data['d2']} ({year})\n\n"
-        res += f"| Metric | {data['d1']} | {data['d2']} |\n"
-        res += f"| :--- | :--- | :--- |\n"
-        res += f"| **Races Finished Ahead** | **{data['d1_ahead']}** | **{data['d2_ahead']}** |\n"
-        res += f"| Total Common Races | {data['total']} | {data['total']} |\n\n"
-        
-        if data['d1_ahead'] > data['d2_ahead']:
-            res += f"🏆 **{data['d1']}** was superior in head-to-head race finishes in {year}.\n"
-        elif data['d2_ahead'] > data['d1_ahead']:
-            res += f"🏆 **{data['d2']}** was superior in head-to-head race finishes in {year}.\n"
-        else:
-            res += f"⚖️  It was a perfectly even season (Tie) between {data['d1']} and {data['d2']}!\n"
-            
-        res += "\n[CRITICAL NOTE FOR AGENT: DO NOT SUMMARIZE OR REPHRASE THE TABLE ABOVE. RETURN IT VERBATIM TO THE USER.]"
-        return res
+        data, error = await wrapper.run_sync_tool(compare)
     except Exception as e:
         return f"Comparison failed: {e}"
+
+    if error:
+        return error
+
+    res = f"### 🏎️ F1 Head-to-Head: {data['id1']} vs {data['id2']} ({year})\n\n"
+    res += f"| Metric | {data['id1']} | {data['id2']} |\n"
+    res += "| :--- | :--- | :--- |\n"
+    res += f"| **Races Finished Ahead** | **{data['d1_ahead']}** | **{data['d2_ahead']}** |\n"
+    res += f"| Total Common Races | {data['total']} | {data['total']} |\n\n"
+
+    if data["d1_ahead"] > data["d2_ahead"]:
+        res += f"🏆 **{data['id1']}** was superior in head-to-head finishes in {year}.\n"
+    elif data["d2_ahead"] > data["d1_ahead"]:
+        res += f"🏆 **{data['id2']}** was superior in head-to-head finishes in {year}.\n"
+    else:
+        res += f"⚖️ It was a perfectly even season between {data['id1']} and {data['id2']}!\n"
+
+    if data["rows"]:
+        res += "\n### Race-by-Race Results\n\n"
+        res += pd.DataFrame(data["rows"]).to_markdown(index=False)
+    return res
 
 
 
@@ -897,210 +781,530 @@ async def f1_constructor_champions(year_filter: str = "") -> str:
 @tool
 async def f1_circuit_guide(circuit_query: str = "") -> str:
     """
-    Provides technical and historical details about F1 circuits/tracks.
-    Includes location, track length, and historical significance.
-    
+    Provides details about F1 circuits/tracks from Jolpica.
+    Includes location, coordinates, and Wikipedia link.
+
     Args:
-        circuit_query: Circuit name or ID (e.g., 'Monaco', 'Silverstone', 'spa')
+        circuit_query: Circuit name or ID (e.g., 'Monaco', 'Silverstone', 'spa').
+                       Leave empty to list all circuits in the current season.
     """
+    from utils.async_tools import get_async_wrapper
+    from core.api_client import get_jolpica_client
+
+    wrapper = get_async_wrapper()
+
+    def fetch():
+        jolpica = get_jolpica_client()
+        if not circuit_query:
+            return jolpica.get_circuits(year=datetime.now().year)
+        all_circuits = jolpica.get_circuits()
+        q = circuit_query.lower()
+        matches = [
+            c for c in all_circuits
+            if q in c["circuit_name"].lower()
+            or q in c["circuit_id"].lower()
+            or q in c.get("locality", "").lower()
+            or q in c.get("country", "").lower()
+        ]
+        return matches
+
     try:
-        from utils.async_tools import get_async_wrapper
-        wrapper = get_async_wrapper()
-
-        def fetch_circuit():
-            # If no query, list all circuits for current year
-            if not circuit_query:
-                # get_circuits returns a SimpleResponse (DataFrame)
-                circuits = ergast.get_circuits(season=datetime.now().year)
-                return circuits if not circuits.empty else None
-            
-            # Try to find specific circuit by getting all and filtering
-            # Ergast.get_circuits does NOT support circuit= keyword in this version
-            all_circs = ergast.get_circuits(limit=1000)
-            
-            # Filter by ID or Name
-            q = circuit_query.lower()
-            mask = (
-                all_circs['circuitId'].str.lower().str.contains(q) | 
-                all_circs['circuitName'].str.lower().str.contains(q)
-            )
-            circ = all_circs[mask]
-            
-            if circ.empty:
-                # Try season search if query looks like a year
-                if circuit_query.isdigit():
-                    return ergast.get_circuits(season=int(circuit_query))
-                return None
-                
-            return circ
-
-        data = await wrapper.run_sync_tool(fetch_circuit)
-        
-        if data is None or data.empty:
-            return f"No circuit data found for: {circuit_query}"
-            
-        if len(data) > 1 and not circuit_query:
-            # Table of circuits
-            df = data[['circuitId', 'circuitName', 'locality', 'country']]
-            return "## 🏁 F1 Circuits\n\n" + df.to_markdown(index=False)
-            
-        circ = data.iloc[0]
-        res = f"## 🗺️ Circuit Profile: {circ['circuitName']}\n\n"
-        res += f"- **Location**: {circ.get('locality', 'N/A')}, {circ.get('country', 'N/A')}\n"
-        res += f"- **Track ID**: `{circ['circuitId']}`\n"
-        res += f"- **Coordinates**: Lat {circ.get('lat', 'N/A')}, Long {circ.get('long', 'N/A')}\n\n"
-        res += f"[More Information]({circ.get('url', '#')})"
-        return res
+        data = await wrapper.run_sync_tool(fetch)
     except Exception as e:
         logger.error(f"Circuit guide failed: {e}")
         return f"Error: {e}"
+
+    if not data:
+        return f"No circuit found for: '{circuit_query}'"
+
+    if len(data) > 1:
+        df = pd.DataFrame([{
+            "ID": c["circuit_id"],
+            "Circuit": c["circuit_name"],
+            "Location": c["locality"],
+            "Country": c["country"],
+        } for c in data])
+        return "## 🏁 F1 Circuits\n\n" + df.to_markdown(index=False)
+
+    c = data[0]
+    res = f"## 🗺️ Circuit Profile: {c['circuit_name']}\n\n"
+    res += f"- **Location**: {c['locality']}, {c['country']}\n"
+    res += f"- **Circuit ID**: `{c['circuit_id']}`\n"
+    res += f"- **Coordinates**: Lat {c['lat']}, Long {c['long']}\n"
+    if c.get("url"):
+        res += f"- **Wikipedia**: [{c['circuit_name']}]({c['url']})\n"
+
+    # Fetch recent race winners at this circuit
+    def fetch_winners():
+        from core.api_client import get_jolpica_client
+        return get_jolpica_client().get_circuit_winners(c["circuit_id"], limit=5)
+
+    try:
+        winners = await wrapper.run_sync_tool(fetch_winners)
+        if winners:
+            res += "\n### 🏆 Recent Race Winners\n\n"
+            res += "| Year | Winner | Team |\n| :--- | :--- | :--- |\n"
+            for w in winners:
+                res += f"| {w['year']} | {w['winner']} | {w['team']} |\n"
+    except Exception:
+        pass
+
+    return res
 
 
 @tool
 async def f1_constructor_career_summary(constructor_query: str) -> str:
     """
-    Comprehensive career summary for an F1 Constructor (Team).
-    Includes championships, wins, and historical results.
-    
+    Comprehensive career summary for an F1 Constructor (Team) from Jolpica.
+    Includes championships, wins, and total race entries.
+
     Args:
-        constructor_query: Team name or ID (e.g., 'Ferrari', 'McLaren', 'red_bull')
+        constructor_query: Team name or ID (e.g., 'Ferrari', 'McLaren', 'red bull')
     """
+    from utils.async_tools import get_async_wrapper
+    from core.api_client import get_jolpica_client
+
+    wrapper = get_async_wrapper()
+
+    def fetch():
+        jolpica = get_jolpica_client()
+        constructor_id = jolpica.search_constructor_id(constructor_query)
+        if not constructor_id:
+            return None
+        return jolpica.get_constructor_career(constructor_id)
+
     try:
-        from utils.async_tools import get_async_wrapper
-        wrapper = get_async_wrapper()
-
-        def fetch_constructor():
-            # Find constructor ID
-            # get_constructor_info returns a SimpleResponse (DataFrame)
-            c_info = ergast.get_constructor_info(constructor=constructor_query)
-            logger.info(f"Constructor info for '{constructor_query}': empty={c_info.empty}")
-            if c_info.empty:
-                return None
-            
-            team = c_info.iloc[0]
-            c_id = team['constructorId']
-            logger.info(f"Using constructor ID: {c_id}")
-            
-            # Multi-page fetch
-            def fetch_all(method, **kwargs):
-                all_content = []
-                offset, limit = 0, 100
-                while True:
-                    res = method(limit=limit, offset=offset, **kwargs)
-                    if not hasattr(res, 'content') or not res.content: break
-                    all_content.extend(res.content)
-                    if len(all_content) >= res.total_results: break
-                    offset += limit
-                return all_content
-
-            results_content = fetch_all(ergast.get_race_results, constructor=c_id)
-            
-            # Titles
-            titles = 0
-            seasons = set()
-            for r in results_content:
-                if 'season' in r.columns:
-                    seasons.update(r['season'].unique())
-            
-            for s in sorted(seasons, reverse=True):
-                try:
-                    s_standings = _get_cached_constructor_standings(int(s))
-                    if hasattr(s_standings, 'content') and s_standings.content:
-                        top = s_standings.content[0].iloc[0]
-                        if top['constructorId'] == c_id:
-                            titles += 1
-                except: continue
-            
-            wins, podiums = 0, 0
-            for r in results_content:
-                if not r.empty:
-                    race_pos = pd.to_numeric(r['position'], errors='coerce')
-                    wins += (race_pos == 1).sum()
-                    podiums += (race_pos <= 3).sum()
-            
-            return {
-                "name": team['constructorName'],
-                "nationality": team['constructorNationality'],
-                "titles": titles,
-                "wins": wins,
-                "podiums": podiums,
-                "url": team['url']
-            }
-
-        stats = await wrapper.run_sync_tool(fetch_constructor)
-        
-        if not stats:
-            return f"Could not find career data for constructor: {constructor_query}"
-            
-        res = f"## 🏎️ Constructor Profile: {stats['name']}\n\n"
-        res += f"- **Nationality**: {stats['nationality']}\n\n"
-        
-        res += "| Achievement | Total |\n"
-        res += "| :--- | :--- |\n"
-        res += f"| 🏆 Championships | **{stats['titles']}** |\n"
-        res += f"| 🥇 Race Wins | **{stats['wins']}** |\n"
-        res += f"| 🥉 Podiums | **{stats['podiums']}** |\n\n"
-        
-        res += f"[History & Wiki]({stats['url']})"
-        return res
+        stats = await wrapper.run_sync_tool(fetch)
     except Exception as e:
         logger.error(f"Constructor summary failed: {e}")
         return f"Error: {e}"
 
+    if not stats:
+        return (
+            f"Could not find constructor: '{constructor_query}'. "
+            "Try the team name (e.g. 'ferrari', 'mclaren', 'red bull', 'mercedes')."
+        )
+
+    entries = stats.get("entries", 0) or 0
+    wins = stats.get("wins", 0) or 0
+    win_rate = f"{wins / entries * 100:.1f}%" if entries > 0 else "N/A"
+
+    res = f"## 🏎️ Constructor Profile: {stats['name']}\n\n"
+    if stats.get("nationality"):
+        res += f"- **Nationality**: {stats['nationality']}\n\n"
+    res += "| Achievement | Total |\n"
+    res += "| :--- | :--- |\n"
+    res += f"| 🏆 Championships | **{stats['championships']}** |\n"
+    res += f"| 🥇 Race Wins | **{wins}** |\n"
+    res += f"| 🅿️ Pole Positions | **{stats.get('poles', 'N/A')}** |\n"
+    res += f"| 🚩 Race Entries | **{entries}** |\n"
+    res += f"| 📈 Win Rate | **{win_rate}** |\n\n"
+    if stats.get("url"):
+        res += f"[History & Wiki]({stats['url']})"
+    return res
+
+
+def _fetch_standings_wikipedia(year: int) -> str:
+    """
+    Scrape current championship standings from Wikipedia.
+    Used as fallback when Ergast doesn't have data for recent/current seasons.
+    """
+    url = f"https://en.wikipedia.org/wiki/{year}_Formula_One_World_Championship"
+    headers = {'User-Agent': 'F1Agent/1.0'}
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
+    tables = pd.read_html(io.StringIO(response.text))
+
+    output = f"## 🏆 {year} F1 Championship Standings (via Wikipedia)\n\n"
+    found_any = False
+
+    for t in tables:
+        cols_str = str(t.columns).lower()
+        text = t.to_string().lower()
+        # Driver standings table: has 'driver' and 'points' columns
+        if 'driver' in cols_str and 'points' in cols_str and len(t) >= 5:
+            # Check it's not the race-results table (too wide)
+            if len(t.columns) <= 30:
+                df = t.copy()
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [' '.join(dict.fromkeys(str(c) for c in col)).strip()
+                                  for col in df.columns.values]
+                # Try to find position and points columns
+                pos_col = next((c for c in df.columns if 'pos' in str(c).lower()), None)
+                drv_col = next((c for c in df.columns if 'driver' in str(c).lower()), None)
+                pts_col = next((c for c in df.columns if 'point' in str(c).lower()), None)
+                if drv_col and pts_col:
+                    display_cols = [c for c in [pos_col, drv_col, pts_col] if c]
+                    snippet = df[display_cols].dropna(subset=[pts_col]).head(25)
+                    if not snippet.empty:
+                        output += "### 👤 Driver Standings\n\n"
+                        output += snippet.to_markdown(index=False) + "\n\n"
+                        found_any = True
+                        break
+
+    for t in tables:
+        cols_str = str(t.columns).lower()
+        if 'constructor' in cols_str and 'points' in cols_str and len(t) >= 5:
+            if len(t.columns) <= 30:
+                df = t.copy()
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [' '.join(dict.fromkeys(str(c) for c in col)).strip()
+                                  for col in df.columns.values]
+                pos_col = next((c for c in df.columns if 'pos' in str(c).lower()), None)
+                con_col = next((c for c in df.columns if 'constructor' in str(c).lower()), None)
+                pts_col = next((c for c in df.columns if 'point' in str(c).lower()), None)
+                if con_col and pts_col:
+                    display_cols = [c for c in [pos_col, con_col, pts_col] if c]
+                    snippet = df[display_cols].dropna(subset=[pts_col]).head(15)
+                    if not snippet.empty:
+                        output += "### 🏎️ Constructor Standings\n\n"
+                        output += snippet.to_markdown(index=False) + "\n"
+                        found_any = True
+                        break
+
+    if not found_any:
+        raise ValueError(f"Could not parse standings tables from Wikipedia for {year}")
+    return output
+
 
 @tool
-async def f1_standings(year: int = 2026) -> str:
+async def f1_standings(year: int = 0) -> str:
     """
-    Returns the CURRENT F1 World Championship standings for drivers and constructors.
+    Returns the LIVE F1 World Championship standings for drivers and constructors.
+    Data comes directly from the Jolpica REST API (api.jolpi.ca) — real-time JSON,
+    updated within minutes of each session ending.
     Use when user asks for: "current standings", "championship points", "who is leading",
-    "driver standings", "team standings", "points table".
-    
+    "driver standings", "team standings", "points table", or any year's standings.
+
     Args:
-        year: The F1 season year (default: 2026)
+        year: The F1 season year (0 = current year)
+    """
+    from utils.async_tools import get_async_wrapper
+    from datetime import datetime as _dt
+    from core.api_client import get_jolpica_client
+
+    year = year or _dt.now().year
+    wrapper = get_async_wrapper()
+
+    def fetch():
+        client = get_jolpica_client()
+        drivers = client.get_driver_standings(year)
+        constructors = client.get_constructor_standings(year)
+        return drivers, constructors
+
+    try:
+        drivers, constructors = await wrapper.run_sync_tool(fetch)
+    except Exception as e:
+        logger.error(f"Jolpica standings fetch failed: {e}")
+        return f"Could not fetch {year} standings: {e}"
+
+    if not drivers and not constructors:
+        return (
+            f"No standings data found for {year} via the Jolpica API. "
+            "The season may not have started, or the API may be temporarily unavailable."
+        )
+
+    output = f"## 🏆 {year} F1 Championship Standings\n*(Source: api.jolpi.ca — live data)*\n\n"
+
+    if drivers:
+        df_d = pd.DataFrame(drivers)
+        df_d = df_d[['position', 'points', 'wins', 'driver_name', 'team_name']]
+        df_d.columns = ['Pos', 'Pts', 'Wins', 'Driver', 'Team']
+        output += "### 👤 Driver Standings\n\n"
+        output += df_d.to_markdown(index=False) + "\n\n"
+
+    if constructors:
+        df_c = pd.DataFrame(constructors)
+        df_c = df_c[['position', 'points', 'wins', 'team_name']]
+        df_c.columns = ['Pos', 'Pts', 'Wins', 'Team']
+        output += "### 🏎️ Constructor Standings\n\n"
+        output += df_c.to_markdown(index=False) + "\n"
+
+    return output
+
+
+@tool
+async def f1_next_race_preview() -> str:
+    """
+    Shows information about the NEXT upcoming F1 race: date, circuit, location,
+    and the last 5 winners at that circuit — fetched from Jolpica (no FastF1 session loads).
+    Use when user asks: 'next race', 'when is the next GP', 'what's coming up',
+    'upcoming race', 'next round'.
     """
     try:
+        import fastf1
         from utils.async_tools import get_async_wrapper
-        wrapper = get_async_wrapper()
-        
-        def fetch_standings():
-            # Get driver standings
-            d_standings = _get_cached_driver_standings(year)
-            # Get constructor standings
-            c_standings = _get_cached_constructor_standings(year)
-            
-            output = f"## 🏆 {year} F1 Championship Standings\n\n"
-            
-            if hasattr(d_standings, 'content') and d_standings.content:
-                df_d = d_standings.content[0]
-                output += "### 👤 Driver Standings\n\n"
-                # Select key columns
-                cols = ['position', 'points', 'wins', 'givenName', 'familyName', 'constructorName']
-                df_d_display = df_d.copy()
-                df_d_display['Driver'] = df_d_display['givenName'] + " " + df_d_display['familyName']
-                df_d_display = df_d_display[['position', 'points', 'wins', 'Driver', 'constructorName']]
-                df_d_display.columns = ['Pos', 'Pts', 'Wins', 'Driver', 'Team']
-                output += df_d_display.head(20).to_markdown(index=False) + "\n\n"
-            
-            if hasattr(c_standings, 'content') and c_standings.content:
-                df_c = c_standings.content[0]
-                output += "### 🏎️ Constructor Standings\n\n"
-                df_c_display = df_c[['position', 'points', 'wins', 'name']]
-                df_c_display.columns = ['Pos', 'Pts', 'Wins', 'Team']
-                output += df_c_display.to_markdown(index=False) + "\n"
-                
-            return output
+        from core.api_client import get_jolpica_client
 
-        return await wrapper.run_sync_tool(fetch_standings)
+        wrapper = get_async_wrapper()
+
+        def fetch():
+            # FastF1 schedule is lightweight — only reads the calendar, no telemetry
+            remaining = fastf1.get_events_remaining()
+            if remaining.empty:
+                return None
+
+            next_event = remaining.iloc[0]
+            circuit_id = str(next_event.get('OfficialEventName', '')).lower()
+            # FastF1 doesn't expose circuitId directly; get it from Jolpica schedule
+            jolpica = get_jolpica_client()
+            current_year = next_event['EventDate'].year
+            schedule = jolpica.get_season_schedule(current_year)
+
+            # Match by race name fragment
+            event_name = next_event['EventName']
+            circuit_id = None
+            circuit_name = next_event.get('Location', '')
+            for race in schedule:
+                if event_name.lower() in race['race_name'].lower() or race['race_name'].lower() in event_name.lower():
+                    circuit_id = race['circuit_id']
+                    circuit_name = race['circuit']
+                    break
+
+            history = []
+            if circuit_id:
+                try:
+                    winners = jolpica.get_circuit_winners(circuit_id, limit=5)
+                    history = [f"{w['year']}: {w['winner']} ({w['team']})" for w in winners]
+                except Exception as e:
+                    logger.warning(f"Could not fetch circuit winners for {circuit_id}: {e}")
+
+            return {
+                "name": event_name,
+                "circuit": circuit_name,
+                "location": next_event.get('Location', ''),
+                "country": next_event.get('Country', ''),
+                "date": next_event['EventDate'].strftime('%Y-%m-%d'),
+                "round": int(next_event.get('RoundNumber', 0)),
+                "history": history,
+            }
+
+        data = await wrapper.run_sync_tool(fetch)
+        if not data:
+            return "No upcoming races found. The season may be over."
+
+        out = f"## 🏁 Next Race: {data['name']}\n\n"
+        out += f"- **Round**: {data['round']}\n"
+        out += f"- **Date**: {data['date']}\n"
+        out += f"- **Circuit**: {data['circuit']}\n"
+        out += f"- **Location**: {data['location']}, {data['country']}\n\n"
+        if data['history']:
+            out += "### 🏆 Recent Winners at This Circuit\n\n"
+            for h in data['history']:
+                out += f"- {h}\n"
+        else:
+            out += "*Historical winners not yet available for this circuit.*\n"
+        return out
     except Exception as e:
-        logger.error(f"Standings fetch failed: {e}")
-        return f"Error fetching standings: {e}"
+        logger.error(f"Next race preview failed: {e}")
+        return f"Error fetching next race: {e}"
+
+
+@tool
+async def f1_driver_form(driver: str, n_races: int = 5) -> str:
+    """
+    Shows a driver's results in their last N races to assess current form.
+    Data comes from Jolpica — real-time, no scraping.
+    Use when user asks: 'recent form', 'how has X been performing lately',
+    'last 5 races for Norris', 'is Hamilton in form', 'driver momentum'.
+
+    Args:
+        driver: Driver name (e.g. 'Norris', 'Hamilton', 'Verstappen')
+        n_races: Number of recent races to look at (default: 5)
+    """
+    from utils.async_tools import get_async_wrapper
+    from core.api_client import get_jolpica_client
+    from datetime import datetime as _dt
+
+    wrapper = get_async_wrapper()
+
+    def fetch():
+        jolpica = get_jolpica_client()
+        current_year = _dt.now().year
+        for year in [current_year, current_year - 1]:
+            driver_id = jolpica.search_driver_id(driver, year=year)
+            if not driver_id:
+                continue
+            results = jolpica.get_driver_results(driver_id, year)
+            if results:
+                return results, year, driver_id
+        return None, None, None
+
+    try:
+        results, year, driver_id = await wrapper.run_sync_tool(fetch)
+    except Exception as e:
+        logger.error(f"Driver form fetch failed: {e}")
+        return f"Error fetching driver form: {e}"
+
+    if not results:
+        return f"Could not find recent race data for '{driver}'."
+
+    recent = list(reversed(results[-n_races:] if len(results) >= n_races else results))
+    total_pts = sum(r.get("points", 0) or 0 for r in recent)
+    positions = [int(r["position"]) for r in recent if str(r.get("position", "")).isdigit()]
+    avg_pos = sum(positions) / len(positions) if positions else None
+
+    display = [{
+        "Round": r["round"],
+        "Race": r["race_name"],
+        "Grid": r["grid"],
+        "Pos": r["position"],
+        "Pts": int(r["points"]) if r.get("points") and r["points"] == int(r["points"]) else r.get("points", 0),
+        "Status": r["status"],
+    } for r in recent]
+
+    driver_label = driver_id.replace("_", " ").title() if driver_id else driver.title()
+    out = f"## 📊 {driver_label} — Last {len(recent)} Races ({year})\n\n"
+    out += pd.DataFrame(display).to_markdown(index=False) + "\n\n"
+    out += f"**Points in this period**: {total_pts:.0f}\n"
+    if avg_pos:
+        out += f"**Average finishing position**: P{avg_pos:.1f}\n"
+    return out
+
+
+@tool
+async def f1_points_progression(year: int = 0, top_n: int = 8) -> str:
+    """
+    Generates a line chart showing cumulative championship points per driver
+    across all rounds of a season. Saves as PNG and auto-opens.
+
+    Use when user asks: 'points progression', 'championship battle chart',
+    'points over the season', 'who has been gaining points fastest'.
+
+    Args:
+        year: F1 season year (0 = current year)
+        top_n: Number of top drivers to show (default 8)
+    """
+    from utils.async_tools import get_async_wrapper
+    from core.api_client import get_jolpica_client
+    from datetime import datetime as _dt
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import collections
+
+    year = year or _dt.now().year
+    wrapper = get_async_wrapper()
+
+    try:
+        results = await wrapper.run_sync_tool(
+            lambda: get_jolpica_client().get_season_all_results(year)
+        )
+    except Exception as e:
+        return f"Error fetching {year} season data: {e}"
+
+    if not results:
+        return f"No race results found for {year} yet."
+
+    # Build cumulative points per driver per round
+    rounds = sorted(set(r["round"] for r in results))
+    driver_round_pts: dict[str, dict[int, float]] = collections.defaultdict(dict)
+    for r in results:
+        driver_round_pts[r["driver_name"]][r["round"]] = r.get("points", 0.0)
+
+    cumulative: dict[str, list[float]] = {}
+    for driver, rnd_pts in driver_round_pts.items():
+        total = 0.0
+        series = []
+        for rnd in rounds:
+            total += rnd_pts.get(rnd, 0.0)
+            series.append(total)
+        cumulative[driver] = series
+
+    # Select top N by final total
+    final = {d: pts[-1] for d, pts in cumulative.items()}
+    top_drivers = sorted(final, key=lambda d: -final[d])[:top_n]
+
+    plt.style.use("dark_background")
+    fig, ax = plt.subplots(figsize=(14, 7))
+    colors = ["#E8002D", "#FF8000", "#00D2BE", "#0067FF", "#006F62",
+              "#B6BABD", "#FF1744", "#00E5FF", "#FF6D00", "#64DD17"]
+
+    for i, driver in enumerate(top_drivers):
+        series = cumulative[driver]
+        label = driver.split()[-1]  # surname only
+        ax.plot(rounds[:len(series)], series,
+                marker="o", markersize=3, linewidth=2,
+                color=colors[i % len(colors)], label=label)
+        # Annotate final value
+        ax.annotate(f"{label} ({series[-1]:.0f})",
+                    xy=(rounds[len(series)-1], series[-1]),
+                    xytext=(5, 0), textcoords="offset points",
+                    fontsize=8, color=colors[i % len(colors)])
+
+    ax.set_xlabel("Round", fontsize=12, color="white")
+    ax.set_ylabel("Cumulative Points", fontsize=12, color="white")
+    ax.set_title(f"{year} F1 Championship Points Progression", fontsize=15, color="white", pad=15)
+    ax.legend(loc="upper left", fontsize=9, ncol=2, framealpha=0.3)
+    ax.grid(True, alpha=0.25, color="gray")
+    ax.set_xticks(rounds)
+    ax.tick_params(colors="white")
+    plt.tight_layout()
+
+    filename = f"{PLOTS_DIR}/points_progression_{year}.png"
+    plt.savefig(filename, dpi=150, bbox_inches="tight", facecolor="black")
+    plt.close()
+
+    top3 = ", ".join(f"{d.split()[-1]}: {final[d]:.0f}pts" for d in top_drivers[:3])
+    return f"Chart saved: {filename}\nTop 3 after {len(rounds)} rounds: {top3}"
+
+
+@tool
+async def f1_sprint_results(year: int = 0, round_number: int = 0) -> str:
+    """
+    Returns sprint race results from Jolpica (real-time data).
+    Use when user asks about sprint races, sprint results, sprint shootout outcomes.
+
+    Args:
+        year: F1 season year (0 = current year)
+        round_number: Specific round (0 = all sprint races in the season)
+    """
+    from utils.async_tools import get_async_wrapper
+    from core.api_client import get_jolpica_client
+    from datetime import datetime as _dt
+
+    year = year or _dt.now().year
+    wrapper = get_async_wrapper()
+    rnd = round_number or None
+
+    try:
+        results = await wrapper.run_sync_tool(
+            lambda: get_jolpica_client().get_sprint_results(year, rnd)
+        )
+    except Exception as e:
+        return f"Error fetching sprint data: {e}"
+
+    if not results:
+        return (
+            f"No sprint results found for {year}"
+            + (f" round {round_number}" if round_number else "")
+            + ". Sprint races only occur at selected rounds."
+        )
+
+    if round_number:
+        race_name = results[0]["race_name"] if results else ""
+        header = f"## 🏎️ Sprint Results — {race_name} ({year} Round {round_number})\n\n"
+        rows = [{"Pos": r["position"], "Driver": r["driver_name"],
+                 "Team": r["constructor"], "Pts": r["points"], "Status": r["status"]}
+                for r in results]
+        return header + pd.DataFrame(rows).to_markdown(index=False)
+
+    # All sprints in season
+    output = f"## 🏎️ {year} F1 Sprint Race Results\n*(Source: api.jolpi.ca — live data)*\n\n"
+    from itertools import groupby
+    for rnd_num, group in groupby(sorted(results, key=lambda x: x["round"]), key=lambda x: x["round"]):
+        rnd_list = list(group)
+        race_name = rnd_list[0]["race_name"]
+        output += f"### Round {rnd_num}: {race_name}\n\n"
+        rows = [{"Pos": r["position"], "Driver": r["driver_name"],
+                 "Team": r["constructor"], "Pts": r["points"]}
+                for r in rnd_list[:10]]  # top 10
+        output += pd.DataFrame(rows).to_markdown(index=False) + "\n\n"
+    return output
 
 
 def get_reference_tools() -> list:
-    """
-    Returns a list of all historical reference and lookup tools.
-    Includes the enhanced Ergast-based dynamic tools.
-    """
+    """Returns all historical reference and lookup tools (Jolpica-backed, real-time)."""
     return [
         f1_standings,
         f1_champions_quick_lookup,
@@ -1113,7 +1317,11 @@ def get_reference_tools() -> list:
         f1_reliability_analysis,
         f1_head_to_head,
         f1_wikipedia_lookup,
-        f1_diagnostics
+        f1_diagnostics,
+        f1_next_race_preview,
+        f1_driver_form,
+        f1_points_progression,
+        f1_sprint_results,
     ]
 @tool
 async def f1_diagnostics() -> str:

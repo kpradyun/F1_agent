@@ -3,8 +3,12 @@ Analysis Tools
 F1 advanced analysis tools for telemetry, strategy, and championship calculations
 """
 import logging
+import os
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 from langchain_core.tools import tool
-from config.settings import DATA_DEFAULT_YEAR, MIN_REPLAY_YEAR
+from config.settings import DATA_DEFAULT_YEAR, MIN_REPLAY_YEAR, PLOTS_DIR
 from core.fastf1_adapter import (
     get_schedule,
     get_session_results,
@@ -178,32 +182,167 @@ async def f1_race_weekend_summary(
 
     if year >= MIN_REPLAY_YEAR and grand_prix != "latest":
         try:
-            session_results = await wrapper.run_sync_tool(get_session_results, year, grand_prix, "Race")
-            lines = session_results.split('\n')[1:3]
-            
-            if len(lines) >= 2:
-                driver1 = lines[0].split('(')[0].strip().split('. ')[1]
-                driver2 = lines[1].split('(')[0].strip().split('. ')[1]
-                
-                # Use ainvoke for async tool call
-                telem_result = await f1_telemetry_plot.ainvoke({
-                    "driver1": driver1,
-                    "driver2": driver2,
-                    "grand_prix": grand_prix,
-                    "year": year,
-                    "session": "Race"
-                })
-                output += f"[TELEMETRY - Top 2 Drivers]\n{telem_result}\n\n"
+            from core.fastf1_adapter import load_session
+            race_session = await wrapper.run_sync_tool(load_session, year, grand_prix, "Race")
+            if race_session is not None:
+                res = race_session.results
+                if res is not None and not res.empty and len(res) >= 2:
+                    driver1 = str(res.iloc[0].get('Abbreviation', ''))
+                    driver2 = str(res.iloc[1].get('Abbreviation', ''))
+                    if driver1 and driver2:
+                        telem_result = await f1_telemetry_plot.ainvoke({
+                            "driver1": driver1,
+                            "driver2": driver2,
+                            "grand_prix": grand_prix,
+                            "year": year,
+                            "session": "Race"
+                        })
+                        output += f"[TELEMETRY - Top 2 Drivers]\n{telem_result}\n\n"
         except Exception as e:
             output += f"[TELEMETRY] Failed: {e}\n\n"
     
     return output
 
 
+@tool
+async def f1_lap_chart(grand_prix: str, year: int = DATA_DEFAULT_YEAR, session: str = "Race") -> str:
+    """
+    Creates a position-by-lap line chart for all drivers showing how positions changed
+    throughout the race. Visualizes overtakes, pit stop effects, and safety car periods.
+    Use when user asks about: lap chart, position changes by lap, overtake visualization,
+    who was where on lap N, position history through the race.
+    """
+    try:
+        from core.fastf1_adapter import load_session
+        import pandas as pd
+
+        wrapper = get_async_wrapper()
+        session_obj = await wrapper.run_sync_tool(load_session, year, grand_prix, session)
+        if session_obj is None:
+            return f"Could not load session data for {grand_prix} {year}."
+
+        laps = session_obj.laps
+        if laps.empty:
+            return "No lap data available for this session."
+
+        drivers = laps['Driver'].unique()
+        fig, ax = plt.subplots(figsize=(16, 9))
+        fig.patch.set_facecolor('#1E1E1E')
+        ax.set_facecolor('#1E1E1E')
+
+        import fastf1.plotting
+        for driver in drivers:
+            d_laps = laps.pick_drivers(driver)[['LapNumber', 'Position']].dropna()
+            if d_laps.empty:
+                continue
+            try:
+                color = fastf1.plotting.get_driver_color(driver, session=session_obj)
+            except Exception:
+                color = '#AAAAAA'
+            ax.plot(d_laps['LapNumber'], d_laps['Position'],
+                    color=color, linewidth=1.5, alpha=0.85)
+            last = d_laps.iloc[-1]
+            ax.annotate(driver, (last['LapNumber'], last['Position']),
+                        color=color, fontsize=7, va='center',
+                        xytext=(3, 0), textcoords='offset points')
+
+        ax.set_xlabel('Lap', color='white')
+        ax.set_ylabel('Position', color='white')
+        ax.set_title(f'Lap Chart — {grand_prix} {year} {session}', color='white', fontsize=14)
+        ax.invert_yaxis()
+        ax.set_yticks(range(1, len(drivers) + 1))
+        ax.tick_params(colors='white')
+        ax.grid(axis='both', alpha=0.2, color='gray')
+        plt.tight_layout()
+
+        filename = f"{PLOTS_DIR}/{year}_{grand_prix.replace(' ', '_')}_lap_chart.png"
+        plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='#1E1E1E')
+        plt.close()
+
+        return f"Lap chart saved: {filename}"
+    except Exception as e:
+        logger.error(f"Lap chart failed: {e}")
+        return f"Lap chart error: {e}"
+
+
+@tool
+async def f1_gap_evolution(grand_prix: str, year: int = DATA_DEFAULT_YEAR, session: str = "Race") -> str:
+    """
+    Creates a gap-to-leader chart showing how the gap between each driver and
+    the race leader evolved over every lap. Reveals when gaps opened, closed,
+    and the impact of pit stops and safety cars.
+    Use when user asks about: gap to leader, gap evolution, when did Verstappen
+    build his lead, battle for position, closing gap.
+    """
+    try:
+        from core.fastf1_adapter import load_session
+        import pandas as pd
+        import numpy as np
+
+        wrapper = get_async_wrapper()
+        session_obj = await wrapper.run_sync_tool(load_session, year, grand_prix, session)
+        if session_obj is None:
+            return f"Could not load session data for {grand_prix} {year}."
+
+        laps = session_obj.laps
+        if laps.empty:
+            return "No lap data available."
+
+        # Calculate cumulative race time per driver per lap
+        laps_clean = laps[['Driver', 'LapNumber', 'LapTime']].dropna()
+        laps_clean = laps_clean.copy()
+        laps_clean['LapTime_s'] = laps_clean['LapTime'].dt.total_seconds()
+        laps_clean['CumTime'] = laps_clean.groupby('Driver')['LapTime_s'].cumsum()
+
+        # Leader cumulative time per lap
+        leader_times = laps_clean.sort_values('CumTime').groupby('LapNumber').first()[['Driver', 'CumTime']]
+        leader_times.columns = ['Leader', 'LeaderCumTime']
+
+        merged = laps_clean.merge(leader_times, on='LapNumber')
+        merged['GapToLeader'] = merged['CumTime'] - merged['LeaderCumTime']
+
+        import fastf1.plotting
+        fig, ax = plt.subplots(figsize=(16, 9))
+        fig.patch.set_facecolor('#1E1E1E')
+        ax.set_facecolor('#1E1E1E')
+
+        for driver, d_data in merged.groupby('Driver'):
+            d_data = d_data.sort_values('LapNumber')
+            if d_data['GapToLeader'].max() > 120:
+                continue  # Skip lapped drivers for readability
+            try:
+                color = fastf1.plotting.get_driver_color(driver, session=session_obj)
+            except Exception:
+                color = '#AAAAAA'
+            ax.plot(d_data['LapNumber'], d_data['GapToLeader'],
+                    color=color, linewidth=1.5, alpha=0.85)
+            last = d_data.iloc[-1]
+            ax.annotate(driver, (last['LapNumber'], last['GapToLeader']),
+                        color=color, fontsize=7, va='center',
+                        xytext=(3, 0), textcoords='offset points')
+
+        ax.axhline(y=0, color='white', linestyle='--', alpha=0.4, linewidth=1)
+        ax.set_xlabel('Lap', color='white')
+        ax.set_ylabel('Gap to Leader (s)', color='white')
+        ax.set_title(f'Gap to Leader — {grand_prix} {year} {session}', color='white', fontsize=14)
+        ax.tick_params(colors='white')
+        ax.grid(axis='both', alpha=0.2, color='gray')
+        plt.tight_layout()
+
+        filename = f"{PLOTS_DIR}/{year}_{grand_prix.replace(' ', '_')}_gap_evolution.png"
+        plt.savefig(filename, dpi=150, bbox_inches='tight', facecolor='#1E1E1E')
+        plt.close()
+
+        return f"Gap evolution chart saved: {filename}"
+    except Exception as e:
+        logger.error(f"Gap evolution failed: {e}")
+        return f"Gap evolution error: {e}"
+
+
 def get_analysis_tools() -> list:
     """
     Get all analysis tools.
-    
+
     Returns:
         List of analysis tool functions
     """
@@ -213,5 +352,7 @@ def get_analysis_tools() -> list:
         f1_telemetry_plot,
         f1_tire_strategy,
         f1_championship_calculator,
-        f1_race_weekend_summary
+        f1_race_weekend_summary,
+        f1_lap_chart,
+        f1_gap_evolution,
     ]

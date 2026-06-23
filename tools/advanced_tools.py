@@ -22,41 +22,43 @@ logger = logging.getLogger("AdvancedTools")
 @tool
 async def f1_live_car_telemetry(
     grand_prix: str = "latest",
-    year: int = 2025,
+    year: int = DATA_DEFAULT_YEAR,
     driver_number: Optional[int] = None,
     session_key: str = None
 ) -> str:
     """
-    Get car telemetry data (speed, RPM, gear, throttle, brake, DRS).
-    Works for both LIVE and HISTORICAL sessions.
-    
-    Use when user asks about:
-    - Speed, gear, or RPM in a session
-    - Throttle/brake application
-    - DRS activation zones
-    - Car performance comparisons
-    
+    ⚠️ LIVE / CURRENT SESSION ONLY — uses OpenF1 real-time API.
+    DO NOT use for historical/completed races — use f1_telemetry_plot instead.
+    Use ONLY when a session is currently in progress (live car speed/RPM/DRS).
+
+    Use when user asks about (during a LIVE session):
+    - Live speed, gear, or RPM of a specific car
+    - Live throttle/brake application
+    - DRS activation in real-time
+
     Args:
         grand_prix: Grand Prix name or 'latest'
-        year: The F1 season (default: 2025)
+        year: The F1 season year
         driver_number: Specific driver number (optional)
-        session_key: Direct session key (optional, overrides GP/Year)
+        session_key: Direct OpenF1 session key (optional, overrides GP/Year)
     """
     try:
         from core.session_resolver import get_resolver
+        from tools.live_tools import verify_live_session
         client = get_enhanced_client()
-        
+
         if not session_key:
             if grand_prix == "latest":
-                session_key = await client.get_latest_session_key_async()
+                session = await verify_live_session(client, "latest")
+                session_key = session['session_key']
             else:
                 resolver = get_resolver()
                 session_key = resolver.resolve(year, grand_prix, "Race")
-        
+
         telemetry = await client.get_car_data_async(session_key, driver_number)
-        
+
         if not telemetry:
-            return "No telemetry data available for this session."
+            return "No telemetry data available for this session. Is a session currently live?"
         
         df = pd.DataFrame(telemetry)
         
@@ -86,7 +88,7 @@ async def f1_live_car_telemetry(
 @tool
 async def f1_driver_info(
     grand_prix: str = "latest",
-    year: int = 2025,
+    year: int = DATA_DEFAULT_YEAR,
     session_key: str = None
 ) -> str:
     """
@@ -143,7 +145,7 @@ async def f1_driver_info(
 @tool
 async def f1_pit_stop_analysis(
     grand_prix: str = "latest",
-    year: int = 2025,
+    year: int = DATA_DEFAULT_YEAR,
     driver_number: Optional[int] = None,
     session_key: str = None
 ) -> str:
@@ -219,7 +221,7 @@ async def f1_pit_stop_analysis(
 @tool
 async def f1_race_control_messages(
     grand_prix: str = "latest",
-    year: int = 2025,
+    year: int = DATA_DEFAULT_YEAR,
     session_key: str = None
 ) -> str:
     """
@@ -288,7 +290,7 @@ async def f1_race_control_messages(
 @tool
 async def f1_position_changes(
     grand_prix: str = "latest",
-    year: int = 2025,
+    year: int = DATA_DEFAULT_YEAR,
     driver_number: Optional[int] = None,
     session_key: str = None
 ) -> str:
@@ -379,7 +381,7 @@ async def f1_position_changes(
 @tool
 async def f1_stint_analysis(
     grand_prix: str = "latest",
-    year: int = 2025,
+    year: int = DATA_DEFAULT_YEAR,
     driver_number: Optional[int] = None,
     session_key: str = None
 ) -> str:
@@ -459,7 +461,7 @@ async def f1_stint_analysis(
 @tool
 async def f1_team_radio_log(
     grand_prix: str = "latest",
-    year: int = 2025,
+    year: int = DATA_DEFAULT_YEAR,
     driver_number: Optional[int] = None,
     session_key: str = None
 ) -> str:
@@ -515,39 +517,45 @@ async def f1_team_radio_log(
 @tool
 async def f1_lap_analysis(
     grand_prix: str = "latest",
-    year: int = 2025,
+    year: int = DATA_DEFAULT_YEAR,
     driver_number: Optional[int] = None,
     session_key: str = None
 ) -> str:
     """
-    Detailed lap time and sector analysis for a session.
-    
-    Use when user asks about:
-    - Lap/sector times comparison
-    - Fastest lap details
-    - Personal bests and consistency
-    
+    ⚠️ LIVE / CURRENT SESSION ONLY — uses OpenF1 real-time API.
+    DO NOT use for completed historical races — use f1_telemetry_plot instead.
+
+    Use ONLY when the session is currently in progress or just ended (today):
+    - Live lap time statistics during an active session
+    - Fastest lap so far in the current race/qualifying
+    - Real-time driver consistency during a live session
+
+    NEVER use for historical sessions (e.g. "Silverstone 2024", "Monaco 2023").
+    For historical driver comparisons always use f1_telemetry_plot.
+
     Args:
-        grand_prix: Grand Prix name or 'latest'
-        year: The F1 season (default: 2025)
+        grand_prix: Grand Prix name or 'latest' (use 'latest' for live sessions)
+        year: The F1 season
         driver_number: Specific driver number (optional)
         session_key: Direct session key (optional, overrides GP/Year)
     """
     try:
         from core.session_resolver import get_resolver
+        from tools.live_tools import verify_live_session
         client = get_enhanced_client()
-        
+
         if not session_key:
             if grand_prix == "latest":
-                session_key = await client.get_latest_session_key_async()
+                session = await verify_live_session(client, "latest")
+                session_key = session['session_key']
             else:
                 resolver = get_resolver()
                 session_key = resolver.resolve(year, grand_prix, "Race")
-        
+
         laps = await client.get_laps_async(session_key, driver_number)
-        
+
         if not laps:
-            return "No lap data available."
+            return "No lap data available. Is a live session currently active?"
         
         df = pd.DataFrame(laps)
         

@@ -19,7 +19,7 @@ class AsyncToolWrapper:
     
     async def run_sync_tool(self, func: Callable, *args, **kwargs) -> Any:
         """Run a synchronous function in a thread pool"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(
                 self.executor,

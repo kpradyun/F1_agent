@@ -11,13 +11,17 @@ import matplotlib.pyplot as plt
 import fastf1.plotting
 from langchain_core.tools import tool
 from core.api_client import get_enhanced_client
-from config.settings import PLOTS_DIR, TODAY
+from config.settings import PLOTS_DIR, TODAY, DATA_DEFAULT_YEAR
 
 logger = logging.getLogger("LiveTools")
 
 async def verify_live_session(client, session_key: str) -> dict:
-    """Verifies that the session is actually happening today. Returns session dict or raises Exception."""
-    # Cleaning logic for LLM hallucinations like "/sessions latest"
+    """
+    Returns a session dict for the current or most-recently-started session.
+    Raises Exception if no session has started today (no race weekend).
+    """
+    import datetime as _dt
+
     if session_key:
         session_key = str(session_key).strip()
         if session_key.startswith("/sessions"):
@@ -25,33 +29,30 @@ async def verify_live_session(client, session_key: str) -> dict:
 
     if not session_key or session_key.lower() in ["latest", "nil", "unknown", "live_leaderboard"]:
         session_key = "latest"
-        
+
     if session_key == "latest":
-        # First try searching specifically for sessions TODAY
-        logger.info(f"Resolving 'latest' via TODAY's date: {TODAY}")
-        # Use >= for robustness
-        sessions = await client.get_sessions_async(date_start=f">={TODAY}T00:00:00")
-        
-        if not sessions:
-            # Fallback to general latest session key
-            key = await client.get_latest_session_key_async()
-            if key:
-                sessions = await client.get_sessions_async(session_key=key)
-            
-        if not sessions:
-            # Check if this is a future year/date that might not have live data yet
-            from datetime import datetime
-            try:
-                if int(TODAY.split('-')[0]) > 2025:
-                    raise Exception(f"Live data is not yet available for the {TODAY} season on the OpenF1 servers. As we are currently simulating the 2026 season, please use historical tools like 'f1_session_results' which use the pre-loaded 2026 schedule.")
-            except: pass
-            
-            raise Exception(f"No active sessions found for {TODAY}. If there is no live race right now, try using f1_session_results with 'latest' instead.")
-        
-        # Pick the most recent one
-        sessions.sort(key=lambda x: x.get('date_start', ''))
-        latest_session = sessions[-1]
-        return latest_session
+        now_utc = _dt.datetime.now(_dt.timezone.utc)
+        now_str = now_utc.strftime('%Y-%m-%dT%H:%M:%S')
+        today_str = now_utc.strftime('%Y-%m-%d')
+
+        logger.info(f"Resolving 'latest': looking for sessions started today ({today_str})")
+
+        # Fetch sessions that start today or earlier in the current window
+        sessions = await client.get_sessions_async(date_start=f">={today_str}T00:00:00")
+
+        # Filter to sessions that have ALREADY started (exclude future sessions)
+        started = [s for s in sessions if s.get('date_start', '') <= now_str]
+
+        if not started:
+            raise Exception(
+                f"No active F1 session right now (today: {TODAY}). "
+                "Live tools only work during a race weekend. "
+                "For historical data use f1_session_results instead."
+            )
+
+        # Return the most recently started session
+        started.sort(key=lambda x: x.get('date_start', ''))
+        return started[-1]
     
     # Ensure session_key is numeric
     if not str(session_key).isdigit():
@@ -255,39 +256,40 @@ async def f1_live_intervals(session_key: str = "latest") -> str:
     Use ONLY for live sessions or when user asks about: "live" leaderboard, "current" race positions, "live" gaps, gaps "now".
     Shows P1-P20 with time gaps to leader.
     """
+    session = None
     try:
         client = get_enhanced_client()
         session = await verify_live_session(client, session_key)
-        session_key = session['session_key']
-        
-        intervals = await client.get_intervals_async(session_key)
+        active_key = session['session_key']
+
+        intervals = await client.get_intervals_async(active_key)
         df = pd.DataFrame(intervals)
-        
+
         if df.empty:
             return "No interval data available for this session."
-        
+
         # Get latest interval for each driver
         latest_intervals = df.sort_values('date').groupby('driver_number').tail(1)
         latest_intervals = latest_intervals.sort_values('interval')
-        
+
         output = "--- LIVE TIMING INTERVALS ---\n"
         for idx, row in latest_intervals.iterrows():
             pos = row.get('position', '?')
             driver = row['driver_number']
             gap = row.get('gap_to_leader', '0.000')
             interval = row.get('interval', '0.000')
-            
+
             output += f"P{pos}: #{driver} | Gap: +{gap}s | Interval: {interval}s\n"
-        
+
         return output
-        
+
     except Exception as e:
         # User-friendly explanation for common live-data issues
         err_msg = str(e)
-        if "404" in err_msg:
+        if "404" in err_msg and session is not None:
             from tools.analysis_tools import f1_session_results
             session_name = session.get('session_name', 'current session')
-            
+
             # Check if session is actually finished (end time in past)
             import datetime
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -300,18 +302,23 @@ async def f1_live_intervals(session_key: str = "latest") -> str:
                         is_finished = True
                 except:
                     pass
-            
+
             if is_finished:
                 logger.info(f"Session {session_name} is finished. Falling back to f1_session_results.")
                 results = await f1_session_results.ainvoke({
                     "grand_prix": session.get('location', 'latest'),
-                    "year": session.get('year', 2026),
+                    "year": session.get('year', DATA_DEFAULT_YEAR),
                     "session": session_name
                 })
                 return f"NOTE: The {session_name} has concluded, so live intervals are no longer active. Here are the final results instead:\n\n{results}"
 
-            return f"Live timing data (leaderboard/gaps) is not yet available for the {session_name}. This happens if the session hasn't started, or if the live data feed is delayed. \n\nTIP: If the session has already finished, I can show the final results using: \n`🏎️ f1_session_results(grand_prix='{session.get('location', 'latest')}', year={session.get('year', 2026)}, session='{session_name}')`"
-            
+            return (
+                f"Live timing data is not yet available for the {session_name}. "
+                f"This happens if the session hasn't started or the live feed is delayed.\n\n"
+                f"TIP: Use f1_session_results(grand_prix='{session.get('location', 'latest')}', "
+                f"year={session.get('year', DATA_DEFAULT_YEAR)}, session='{session_name}') for final results."
+            )
+
         logger.error(f"Intervals fetch failed: {e}")
         return f"Interval data unavailable: {e}"
 
@@ -334,33 +341,90 @@ async def f1_live_leaderboard(session_key: str = "latest") -> str:
         intervals, drivers = await asyncio.gather(intervals_task, drivers_task)
         
         if not intervals:
-            return "No live timing data available. Most likely the session hasn't started or is under a red flag."
-            
+            # Detect whether the session has ended and fall back to results
+            import datetime as _dt
+            now = _dt.datetime.now(_dt.timezone.utc)
+            end_str = session.get('date_end', '')
+            if end_str:
+                try:
+                    end_dt = _dt.datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+                    if now > end_dt:
+                        from tools.analysis_tools import f1_session_results
+                        results = await f1_session_results.ainvoke({
+                            "grand_prix": session.get('location', 'latest'),
+                            "year": session.get('year', DATA_DEFAULT_YEAR),
+                            "session": session.get('session_name', 'Race'),
+                        })
+                        return (
+                            f"ℹ️ The {session.get('session_name')} has concluded — "
+                            f"live intervals are no longer active. Final results:\n\n{results}"
+                        )
+                except Exception:
+                    pass
+            return (
+                "No live timing data yet. The session may not have started, "
+                "or the feed is under a red flag / safety car delay."
+            )
+
         # Build driver map
         d_map = {d['driver_number']: d for d in drivers}
-        
-        # Get latest per driver
+
+        # Get latest per driver; sort by position numerically
         df = pd.DataFrame(intervals)
-        latest = df.sort_values('date').groupby('driver_number').tail(1)
-        latest = latest.sort_values('position')
-        
+        latest = df.sort_values('date').groupby('driver_number').tail(1).copy()
+        latest['_pos_num'] = pd.to_numeric(latest['position'], errors='coerce').fillna(99)
+        latest = latest.sort_values('_pos_num')
+
         res = f"### 🏁 Live Leaderboard: {session.get('session_name')}\n\n"
         res += "| Pos | # | Driver | Gap | Int | Team |\n"
         res += "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
-        
+
         for _, row in latest.iterrows():
             dn = row['driver_number']
             info = d_map.get(dn, {})
             name = info.get('name_acronym', f"#{dn}")
             team = info.get('team_name', 'N/A')
             pos = row.get('position', '?')
-            gap = row.get('gap_to_leader', '0.000')
-            interval = row.get('interval', '0.000')
-            
-            res += f"| {pos} | {dn} | **{name}** | +{gap}s | +{interval}s | {team} |\n"
-            
+            raw_gap = row.get('gap_to_leader')
+            raw_int = row.get('interval')
+
+            # P1 gets "LEADER" label; others get "+Xs"
+            try:
+                gap_str = "LEADER" if not raw_gap or float(raw_gap) == 0 else f"+{raw_gap}s"
+                int_str = "—" if not raw_int or float(raw_int) == 0 else f"+{raw_int}s"
+            except (ValueError, TypeError):
+                gap_str = f"+{raw_gap}s" if raw_gap else "LEADER"
+                int_str = f"+{raw_int}s" if raw_int else "—"
+
+            res += f"| {pos} | {dn} | **{name}** | {gap_str} | {int_str} | {team} |\n"
+
         return res
     except Exception as e:
+        err = str(e)
+        if "404" in err:
+            # Session exists but interval feed is dead → check if finished and fall back
+            try:
+                import datetime as _dt
+                session_obj = await verify_live_session(get_enhanced_client(), "latest")
+                end_str = session_obj.get("date_end", "")
+                now = _dt.datetime.now(_dt.timezone.utc)
+                end_dt = _dt.datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+                if now > end_dt:
+                    from tools.analysis_tools import f1_session_results
+                    results = await f1_session_results.ainvoke({
+                        "grand_prix": session_obj.get("location", "latest"),
+                        "year": session_obj.get("year", DATA_DEFAULT_YEAR),
+                        "session": session_obj.get("session_name", "Race"),
+                    })
+                    return (
+                        f"ℹ️ No live session active — showing last completed session results:\n\n{results}"
+                    )
+            except Exception:
+                pass
+            return (
+                "No live timing data available right now. "
+                "There is no active F1 session — use f1_session_results for historical data."
+            )
         return f"Live leaderboard unavailable: {e}"
 
 

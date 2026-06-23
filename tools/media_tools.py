@@ -5,7 +5,7 @@ Tools for downloading and managing F1 media assets (Radio messages, etc.)
 import logging
 import os
 import requests
-from config.settings import PLOTS_DIR
+from config.settings import PLOTS_DIR, DATA_DEFAULT_YEAR
 from core.api_client import get_enhanced_client
 from langchain_core.tools import tool
 
@@ -13,19 +13,19 @@ logger = logging.getLogger("MediaTools")
 
 @tool
 async def f1_download_radio(
-    driver_number: int, 
-    grand_prix: str = "latest", 
-    year: int = 2025,
+    driver_number: int,
+    grand_prix: str = "latest",
+    year: int = DATA_DEFAULT_YEAR,
     session_key: str = None
 ) -> str:
     """
     Downloads the most recent team radio recording for a specific driver.
     Saves the .mp3 to the /plots directory.
-    
+
     Args:
         driver_number: The car number (e.g. 44, 1, 4)
         grand_prix: Grand Prix name or 'latest'
-        year: The F1 season (default: 2025)
+        year: The F1 season (default: current year)
         session_key: Direct session key (optional, overrides GP/Year)
     """
     try:

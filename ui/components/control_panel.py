@@ -48,18 +48,18 @@ class ControlPanel:
             arcade.draw_rect_outline(rect, border, 3)
             
             # Draw text
-            arcade.draw_text(
+            arcade.Text(
                 label, bx + self.button_width/2, by + self.button_height/2, 
                 UI_TEXT_PRIMARY, 11, 
                 anchor_x="center", anchor_y="center", bold=True
-            )
+            ).draw()
         
         # Speed indicator
-        arcade.draw_text(
+        arcade.Text(
             f"Speed: {speed:.2f}x", self.x + 520, self.y + self.button_height/2, 
             UI_TEXT_PRIMARY, 12, 
             anchor_x="left", anchor_y="center", bold=True
-        )
+        ).draw()
     
     def get_clicked_button(self, x, y):
         """Detect which button was clicked"""
