@@ -12,6 +12,7 @@ langchain~=0.3.23
 langchain-huggingface~=0.3.0
 sentence-transformers>=3.0.0
 langchain-google-genai>=2.0.0  # optional cloud LLM fallback (needs GEMINI_API_KEY)
+langgraph-checkpoint-sqlite>=2.0.0
 
 # --- Vector Store ---
 faiss-cpu>=1.8.0
@@ -50,7 +51,5 @@ lxml>=5.1.0              # Faster parser for BeautifulSoup and pandas.read_html
 rich>=13.0.0
 tqdm>=4.67.0
 python-dateutil>=2.9.0
-arcade>=3.0.0
-
 # --- Testing ---
 pytest>=8.0.0

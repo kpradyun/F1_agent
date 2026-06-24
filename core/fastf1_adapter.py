@@ -4,8 +4,9 @@ import pandas as pd
 import numpy as np
 import os
 import logging
+import collections
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # Must be set before any other matplotlib import
 import matplotlib.pyplot as plt
 import datetime
 from datetime import timedelta
@@ -19,7 +20,6 @@ if not os.path.exists(CACHE_DIR):
 if not os.path.exists('plots'):
     os.makedirs('plots')
 
-fastf1.Cache.enable_cache(CACHE_DIR)
 fastf1.plotting.setup_mpl()
 
 def validate_year(year: int) -> bool:
@@ -29,7 +29,24 @@ def validate_year(year: int) -> bool:
 
 # In-memory session cache: avoids re-parsing parquet files within one agent session.
 # FastF1 disk cache already handles cross-session persistence.
-_session_cache: dict = {}
+_MAX_SESSION_CACHE = 20
+_session_cache: collections.OrderedDict = collections.OrderedDict()
+
+
+def _get_cached_session(key: str):
+    """Return cached session or None, promoting to most-recently-used."""
+    if key in _session_cache:
+        _session_cache.move_to_end(key)
+        return _session_cache[key]
+    return None
+
+
+def _put_session_cache(key: str, value) -> None:
+    """Store session in LRU cache, evicting oldest if at capacity."""
+    _session_cache[key] = value
+    _session_cache.move_to_end(key)
+    if len(_session_cache) > _MAX_SESSION_CACHE:
+        _session_cache.popitem(last=False)
 
 def resolve_driver_name(driver_input: str, session) -> str:
     """
@@ -92,9 +109,10 @@ def load_session(year, grand_prix, session_type):
 
     # Check in-memory cache first to avoid redundant disk parquet reads
     cache_key = (int(year), str(grand_prix).lower().strip(), str(session_type).lower().strip())
-    if cache_key in _session_cache:
+    cached = _get_cached_session(cache_key)
+    if cached is not None:
         logger.debug(f"Session cache HIT: {cache_key}")
-        return _session_cache[cache_key]
+        return cached
 
     st_map = {
         'race': 'R', 'r': 'R', 
@@ -214,7 +232,7 @@ def load_session(year, grand_prix, session_type):
             except Exception as e2:
                 logger.error(f"Minimal load also failed for {grand_prix} {st}: {e2}")
                 # Don't return None yet, the tools might still access partial data or we handle it there
-        _session_cache[cache_key] = session
+        _put_session_cache(cache_key, session)
         return session
 
     except Exception as e:

@@ -1178,8 +1178,6 @@ async def f1_points_progression(year: int = 0, top_n: int = 8) -> str:
     from utils.async_tools import get_async_wrapper
     from core.api_client import get_jolpica_client
     from datetime import datetime as _dt
-    import matplotlib
-    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import collections
 

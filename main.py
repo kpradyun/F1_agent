@@ -8,9 +8,14 @@ import os
 import time
 import asyncio
 import logging
+import logging.handlers
+import subprocess
 import warnings
+from dataclasses import dataclass, field
 from rich.console import Console
 from rich.panel import Panel
+from rich.rule import Rule
+from rich.table import Table
 from rich.spinner import Spinner
 from rich.live import Live
 from rich.markdown import Markdown
@@ -38,10 +43,11 @@ logging.basicConfig(
     level=getattr(logging, LOG_LEVEL),
     format=LOG_FORMAT,
     handlers=[
-        logging.FileHandler(LOG_FILE),
+        logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=3),
         logging.StreamHandler()
     ]
 )
+logging.getLogger().handlers[-1].setLevel(logging.WARNING)
 
 for name in logging.root.manager.loggerDict:
     if 'langchain' not in name.lower() and 'f1_data_miner' not in name.lower() and 'fastf1' not in name.lower():
@@ -53,20 +59,24 @@ logger = logging.getLogger("F1_Agent")
 console = Console()
 metrics = PerformanceMetrics()
 
-# Track the most recently generated file for /open command
-_last_generated_file: str | None = None
+MAX_HISTORY_TURNS = 20  # Keep last N turns + system prompt
 
 
-def open_file(path: str):
+@dataclass
+class SessionState:
+    last_generated_file: str | None = None
+    current_year: int = DATA_DEFAULT_YEAR
+    chat_history: list = field(default_factory=list)
+
+
+def open_file(path: str) -> None:
     """Open a file with the system default viewer."""
     try:
         if sys.platform == "win32":
             os.startfile(path)
         elif sys.platform == "darwin":
-            import subprocess
             subprocess.run(["open", path], check=False)
         else:
-            import subprocess
             subprocess.run(["xdg-open", path], check=False)
     except Exception as e:
         console.print(f"[yellow]Could not auto-open file: {e}[/yellow]")
@@ -88,8 +98,7 @@ def extract_file_path(text: str) -> str | None:
     return None
 
 
-def display_status(tool_name: str, status: str, duration: float = 0.0,
-                   mode: str = "Agent"):
+def display_status(status: str, duration: float = 0.0, mode: str = "Agent") -> None:
     """Display completion status with timing and mode indicator."""
     color_map = {"DONE": "green", "ERROR": "red"}
     mode_color = "cyan" if mode == "Quick Lookup" else "yellow"
@@ -100,21 +109,57 @@ def display_status(tool_name: str, status: str, duration: float = 0.0,
     )
 
 
-async def stream_agent_response(agent, messages):
+def print_error(message: str, hint: str = "") -> None:
+    """Display a structured error panel."""
+    body = f"[bold]{message}[/bold]"
+    if hint:
+        body += f"\n[dim]{hint}[/dim]"
+    console.print(Panel(body, title="[bold red]Error[/bold red]", border_style="red", padding=(0, 2)))
+
+
+_TOOL_ICONS: dict[str, str] = {
+    "lookup":    "🔍",
+    "search":    "🔍",
+    "standings": "🏆",
+    "champion":  "🏆",
+    "plot":      "📊",
+    "chart":     "📊",
+    "visual":    "📊",
+    "predict":   "🔮",
+    "weather":   "🌦️",
+    "live":      "📡",
+    "radio":     "📻",
+    "replay":    "▶️ ",
+    "strategy":  "♟️ ",
+}
+
+
+def _tool_icon(name: str) -> str:
+    lname = name.lower()
+    for keyword, icon in _TOOL_ICONS.items():
+        if keyword in lname:
+            return icon
+    return "⚙️ "
+
+
+async def stream_agent_response(agent, messages) -> tuple[str, float] | None:
     """
     Stream agent execution with progressive display.
     Shows tool execution in real-time and streams text as it's generated.
+    Returns (response_text, elapsed) or None on unrecoverable error.
     """
-    global _last_generated_file
-
     config = RunnableConfig(
         recursion_limit=15,
         configurable={"thread_id": "main"}
     )
 
     response_text = ""
-    response_started = False
     last_tool_output = None
+    tool_count = 0
+    start_time = time.time()
+
+    # state.last_generated_file is updated via the caller after we return
+    _file_found: list[str] = []
 
     try:
         async for event in agent.astream({"messages": messages}, config=config, stream_mode="values"):
@@ -126,16 +171,10 @@ async def stream_agent_response(agent, messages):
             if msg.type == "tool":
                 tool_name = getattr(msg, 'name', 'Unknown')
                 tool_output = getattr(msg, 'content', '')
+                tool_count += 1
 
-                icon = "🔍" if "lookup" in tool_name.lower() or "search" in tool_name.lower() else "🏎️"
-                if "all_time" in tool_name.lower() or "champion" in tool_name.lower():
-                    icon = "🏆"
-                if "plot" in tool_name.lower() or "chart" in tool_name.lower():
-                    icon = "📊"
-                if "predict" in tool_name.lower():
-                    icon = "🔮"
-
-                console.print(f"[yellow]{icon} Executing: {tool_name}...[/yellow]")
+                icon = _tool_icon(tool_name)
+                console.print(f"  [dim]{icon}  {tool_name.replace('_', ' ').title()}…[/dim]")
                 metrics.record_tool(tool_name)
 
                 last_tool_output = tool_output
@@ -143,7 +182,7 @@ async def stream_agent_response(agent, messages):
                 # Auto-detect and open generated files
                 file_path = extract_file_path(str(tool_output))
                 if file_path and os.path.exists(file_path):
-                    _last_generated_file = file_path
+                    _file_found.append(file_path)
                     open_file(file_path)
                     console.print(f"[dim green]Opened: {file_path}[/dim green]")
 
@@ -155,71 +194,131 @@ async def stream_agent_response(agent, messages):
 
             elif msg.type == "ai" and not msg.tool_calls:
                 response_text = msg.content
-                response_started = True
 
     except Exception as e:
         error_msg = str(e)
         if "memory" in error_msg.lower():
-            console.print("\n[bold red]✕ Error: System out of memory for this model. Try a smaller one in config/settings.py.[/bold red]")
+            print_error(
+                "System out of memory for this model.",
+                "Try a smaller one in config/settings.py."
+            )
         elif "not found" in error_msg.lower():
-            console.print(f"\n[bold red]✕ Error: Model '{LLM_MODEL}' not found. Run 'ollama pull {LLM_MODEL}' or check config.[/bold red]")
+            print_error(
+                f"Model '{LLM_MODEL}' not found.",
+                f"Run 'ollama pull {LLM_MODEL}' or check config."
+            )
         else:
-            console.print(f"\n[bold red]✕ Error during generation: {e}[/bold red]")
+            print_error(f"Error during generation: {e}")
         return None
 
     if not response_text.strip() and last_tool_output:
         response_text = str(last_tool_output)
 
+    elapsed = time.time() - start_time
+
     if response_text.strip():
-        console.print("\n[bold cyan]Engineer:[/bold cyan]")
-        console.print(Markdown(response_text))
+        console.print(Panel(
+            Markdown(response_text),
+            title="[bold cyan]F1 Race Engineer[/bold cyan]",
+            subtitle=f"[dim]{elapsed:.2f}s · {tool_count} tool{'s' if tool_count != 1 else ''} used[/dim]",
+            border_style="cyan",
+            padding=(1, 2),
+        ))
 
-    console.print()
-    return response_text
+    # Surface any discovered file path to caller via a side-channel attribute
+    stream_agent_response._last_file = _file_found[0] if _file_found else None
+
+    return response_text, elapsed
 
 
-async def get_dynamic_welcome() -> str:
-    """Build a dynamic welcome line showing next race and current champion."""
+async def get_dynamic_welcome() -> str | None:
+    """Return a formatted next-race string, or None if season is complete."""
     try:
         import fastf1
         remaining = fastf1.get_events_remaining()
         if not remaining.empty:
-            next_event = remaining.iloc[0]
-            name = next_event.get('EventName', '')
-            date = next_event['EventDate'].strftime('%d %b %Y')
-            return f"Next race: [bold]{name}[/bold] on [cyan]{date}[/cyan]"
+            evt = remaining.iloc[0]
+            name = evt.get("EventName", "")
+            date = evt["EventDate"].strftime("%d %b %Y")
+            location = evt.get("Location", "")
+            loc_part = f" · [cyan]{location}[/cyan]" if location else ""
+            return f"[bold]{name}[/bold]{loc_part} · [yellow]{date}[/yellow]"
     except Exception:
         pass
-    return f"Season: [bold]{DATA_DEFAULT_YEAR}[/bold]"
+    return None
 
 
-def print_help():
-    """Print all available commands."""
-    commands = {
-        "/weather": "Check live track weather",
-        "/positions": "Live track position map",
-        "/standings": "Current championship standings",
-        "/next": "Next race preview",
-        "/last": "Last race results",
-        "/monitor": "Launch live race monitor dashboard",
-        "/stats": "Performance stats and cache info",
-        "/history [N]": "Show last N messages (default 10)",
-        "/save [file]": "Save conversation to Markdown file",
-        "/open": "Re-open the last generated plot/file",
-        "/year [YYYY]": "Switch default season year",
-        "/clear": "Clear conversation history (keep system prompt)",
-        "/help": "Show this help",
-        "quit / exit / q": "Exit the agent",
-    }
-    console.print("\n[bold cyan]Available Commands:[/bold cyan]")
-    for cmd, desc in commands.items():
-        console.print(f"  [yellow]{cmd:<22}[/yellow] {desc}")
+stream_agent_response._last_file = None
+
+
+def print_help() -> None:
+    """Render help as a structured table inside a panel."""
+    tbl = Table(
+        show_header=True,
+        header_style="bold cyan",
+        box=None,
+        padding=(0, 2),
+        show_lines=False,
+        expand=False,
+    )
+    tbl.add_column("Command",     style="bold yellow", no_wrap=True, min_width=20)
+    tbl.add_column("Description", style="white")
+
+    rows = [
+        # Live Race
+        ("/weather",      "Current track weather conditions"),
+        ("/positions",    "Live track position map"),
+        ("/monitor",      "Launch live race monitoring dashboard"),
+        ("", ""),
+        # Season Data
+        ("/standings",    "Current championship standings"),
+        ("/next",         "Next race preview and circuit info"),
+        ("/last",         "Last race results and podium"),
+        ("", ""),
+        # Session
+        ("/stats",        "Performance metrics and cache info"),
+        ("/history [N]",  "Show last N messages  (default 10)"),
+        ("/save [file]",  "Save conversation to a Markdown file"),
+        ("/open",         "Re-open the last generated plot / file"),
+        ("/year [YYYY]",  "Switch default season year"),
+        ("/clear",        "Clear conversation history"),
+        ("/version",      "Show agent version"),
+        ("/help",         "Show this help"),
+        ("quit / exit",   "Exit the agent"),
+    ]
+
+    for cmd, desc in rows:
+        tbl.add_row(cmd, desc)
+
+    console.print(Panel(
+        tbl,
+        title="[bold cyan]F1 Race Engineer — Help[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2),
+    ))
+
+    examples = Table(box=None, show_header=False, padding=(0, 2))
+    examples.add_column(style="dim cyan")
+    for q in [
+        '"Who won the last race?"',
+        '"Show me Hamilton vs Verstappen lap times at Silverstone 2024"',
+        '"What are the current championship standings?"',
+        '"Predict the tyre strategy for the next race"',
+        '"Plot the gap evolution from Monaco 2024"',
+    ]:
+        examples.add_row(q)
+
+    console.print(Panel(
+        examples,
+        title="[yellow]Example Queries[/yellow]",
+        border_style="dim yellow",
+        padding=(0, 1),
+    ))
     console.print()
 
 
-async def main_async():
+async def main_async() -> None:
     """Main interactive loop for the F1 agent"""
-    global _last_generated_file
 
     # Initialize systems
     llm, QuickLookupBypass = initialize_systems()
@@ -243,26 +342,36 @@ async def main_async():
     bypass = QuickLookupBypass()
 
     # Build dynamic welcome
-    dynamic_line = await get_dynamic_welcome()
+    dynamic_next_race = await get_dynamic_welcome()
 
     active_model = GEMINI_MODEL if LLM_PROVIDER == "gemini" else LLM_MODEL
     provider_label = "Gemini" if LLM_PROVIDER == "gemini" else "Ollama"
+
+    # Build a clean two-column info table
+    info_tbl = Table(box=None, show_header=False, padding=(0, 2), expand=False)
+    info_tbl.add_column(style="dim", no_wrap=True)
+    info_tbl.add_column(style="bold white")
+    info_tbl.add_row("Model", f"{active_model}  [dim]via[/dim]  {provider_label}")
+    info_tbl.add_row("Date", TODAY)
+    info_tbl.add_row("Season", str(DATA_DEFAULT_YEAR))
+    if dynamic_next_race:
+        info_tbl.add_row("Next race", dynamic_next_race)
+    info_tbl.add_row("", "")
+    info_tbl.add_row("", "[dim]Type [bold cyan]/help[/bold cyan] for commands · [bold cyan]quit[/bold cyan] to exit[/dim]")
+
     console.print(Panel(
-        f"[bold green]F1 Race Engineer Online[/bold green]\n"
-        f"Date: [cyan]{TODAY}[/cyan] | "
-        f"Model: [yellow]{active_model}[/yellow] via [yellow]{provider_label}[/yellow]\n"
-        f"{dynamic_line}\n"
-        f"Type [yellow]/help[/yellow] for commands or [yellow]quit[/yellow] to exit.",
-        title="🏎️  F1 RACE ENGINEER",
-        border_style="green"
+        info_tbl,
+        title="[bold white]🏎️  F1 RACE ENGINEER[/bold white]",
+        border_style="green",
+        padding=(1, 3),
     ))
 
-    chat_history = [get_system_prompt()]
-    current_year = DATA_DEFAULT_YEAR
+    state = SessionState(chat_history=[get_system_prompt()])
 
     while True:
         try:
-            user_input = console.input("\n[bold yellow]You:[/bold yellow] ")
+            console.print(Rule(style="dim"))
+            user_input = console.input("\n[bold yellow]›[/bold yellow] ")
             user_input_stripped = user_input.strip()
 
             if not user_input_stripped:
@@ -279,18 +388,35 @@ async def main_async():
                 print_help()
                 continue
 
+            # ── /version ──────────────────────────────────────────────────────
+            if user_input_stripped.lower() == "/version":
+                try:
+                    from importlib.metadata import version as _ver
+                    v = _ver("f1-race-engineer-agent")
+                except Exception:
+                    v = "dev"
+                console.print(f"[cyan]F1 Race Engineer Agent[/cyan] v{v}")
+                continue
+
             # ── /stats ────────────────────────────────────────────────────────
             if user_input_stripped.lower() == "/stats":
-                console.print(metrics.get_summary())
-                cache = get_cache()
-                stats = cache.get_stats()
-                console.print(f"\n[cyan]Cache:[/cyan] {stats['total_entries']} entries, "
-                              f"{stats['total_size_mb']:.2f}MB")
+                s = metrics.get_stats()
+                cache_s = get_cache().get_stats()
+                tbl = Table(box=None, show_header=False, padding=(0, 2))
+                tbl.add_column(style="dim", no_wrap=True)
+                tbl.add_column(style="bold white")
+                tbl.add_row("Queries", str(s["queries"]))
+                tbl.add_row("Avg response", f"{s['avg_time']:.2f}s")
+                tbl.add_row("Top tools", ", ".join(s["top_tools"]) if s["top_tools"] else "none")
+                tbl.add_row("Cache entries", str(cache_s["total_entries"]))
+                tbl.add_row("Cache size", f"{cache_s['total_size_mb']:.2f} MB")
+                tbl.add_row("Cache hit rate", f"{cache_s.get('hit_rate', 0):.1f}%")
+                console.print(Panel(tbl, title="[bold cyan]Session Statistics[/bold cyan]", border_style="cyan"))
                 continue
 
             # ── /clear ────────────────────────────────────────────────────────
             if user_input_stripped.lower() == "/clear":
-                chat_history = [get_system_prompt()]
+                state.chat_history = [get_system_prompt()]
                 console.print("[green]Conversation history cleared.[/green]")
                 continue
 
@@ -300,34 +426,42 @@ async def main_async():
                 n = 10
                 if len(parts) > 1 and parts[1].isdigit():
                     n = int(parts[1])
-                history_msgs = chat_history[-n:]
-                for msg in history_msgs:
+                history_msgs = state.chat_history[-n:]
+                for i, msg in enumerate(history_msgs):
                     role = "You" if isinstance(msg, HumanMessage) else "Engineer"
                     color = "yellow" if isinstance(msg, HumanMessage) else "cyan"
-                    preview = str(msg.content)[:200] + ("..." if len(str(msg.content)) > 200 else "")
-                    console.print(f"[{color}]{role}:[/{color}] {preview}")
+                    preview = str(msg.content)[:280] + ("…" if len(str(msg.content)) > 280 else "")
+                    console.print(f"[dim]({i+1:>2})[/dim]  [{color}]{role}:[/{color}] {preview}")
+                    console.print()
                 continue
 
             # ── /save [filename] ──────────────────────────────────────────────
             if user_input_stripped.lower().startswith("/save"):
+                from datetime import datetime as _dt
                 parts = user_input_stripped.split(maxsplit=1)
-                fname = parts[1] if len(parts) > 1 else f"f1_conversation_{TODAY}.md"
+                ts = _dt.now().strftime("%H%M")
+                fname = parts[1] if len(parts) > 1 else f"f1_session_{TODAY}_{ts}.md"
                 if not fname.endswith(".md"):
                     fname += ".md"
-                lines = [f"# F1 Agent Conversation — {TODAY}\n"]
-                for msg in chat_history[1:]:  # skip system prompt
+                turns = [m for m in state.chat_history[1:] if isinstance(m, (HumanMessage, AIMessage))]
+                front = (
+                    f"---\ntitle: F1 Agent Conversation\ndate: {TODAY}\n"
+                    f"model: {active_model}\nturns: {len(turns)}\n---\n\n"
+                )
+                lines = [front]
+                for msg in turns:
                     role = "**You**" if isinstance(msg, HumanMessage) else "**Engineer**"
-                    lines.append(f"\n{role}: {msg.content}\n")
+                    lines.append(f"{role}: {msg.content}\n\n---\n\n")
                 with open(fname, "w", encoding="utf-8") as f:
                     f.writelines(lines)
-                console.print(f"[green]Conversation saved to {fname}[/green]")
+                console.print(Panel(f"Saved to [bold]{fname}[/bold]", border_style="green", padding=(0, 2)))
                 continue
 
             # ── /open ─────────────────────────────────────────────────────────
             if user_input_stripped.lower() == "/open":
-                if _last_generated_file and os.path.exists(_last_generated_file):
-                    open_file(_last_generated_file)
-                    console.print(f"[green]Opening: {_last_generated_file}[/green]")
+                if state.last_generated_file and os.path.exists(state.last_generated_file):
+                    open_file(state.last_generated_file)
+                    console.print(f"[green]Opening: {state.last_generated_file}[/green]")
                 else:
                     console.print("[yellow]No file has been generated in this session yet.[/yellow]")
                 continue
@@ -336,10 +470,10 @@ async def main_async():
             if user_input_stripped.lower().startswith("/year"):
                 parts = user_input_stripped.split()
                 if len(parts) > 1 and parts[1].isdigit():
-                    current_year = int(parts[1])
-                    console.print(f"[green]Default year set to {current_year}[/green]")
+                    state.current_year = int(parts[1])
+                    console.print(f"[green]Default year set to {state.current_year}[/green]")
                 else:
-                    console.print(f"[yellow]Current default year: {current_year}[/yellow]")
+                    console.print(f"[yellow]Current default year: {state.current_year}[/yellow]")
                 continue
 
             # ── /monitor ──────────────────────────────────────────────────────
@@ -380,35 +514,42 @@ async def main_async():
                     # Auto-open any file in the result
                     file_path = extract_file_path(str(result))
                     if file_path and os.path.exists(file_path):
-                        _last_generated_file = file_path
+                        state.last_generated_file = file_path
                         open_file(file_path)
 
-                    console.print("\n[bold cyan]Engineer:[/bold cyan]")
-                    console.print(Markdown(str(result)))
+                    console.print(Panel(
+                        Markdown(str(result)),
+                        title="[bold cyan]F1 Race Engineer[/bold cyan]",
+                        subtitle=f"[dim]⚡ Quick Lookup · {elapsed:.2f}s[/dim]",
+                        border_style="cyan",
+                        padding=(1, 2),
+                    ))
                     metrics.record_query(elapsed)
-                    display_status(bypass_match["name"], "DONE", elapsed, mode="Quick Lookup")
-                    chat_history.append(HumanMessage(content=user_input_stripped))
-                    chat_history.append(AIMessage(content=result))
+                    state.chat_history.append(HumanMessage(content=user_input_stripped))
+                    state.chat_history.append(AIMessage(content=result))
                     continue
                 except Exception as e:
                     console.print(f"[yellow]⚠ Bypass failed, using full agent: {e}[/yellow]")
 
             # ── Full agent path ───────────────────────────────────────────────
-            chat_history.append(HumanMessage(content=user_input_stripped))
-            start_time = time.time()
+            state.chat_history.append(HumanMessage(content=user_input_stripped))
 
-            response_text = await stream_agent_response(agent, chat_history)
+            result = await stream_agent_response(agent, state.chat_history)
 
-            elapsed = time.time() - start_time
-            metrics.record_query(elapsed)
+            if result is not None:
+                response_text, elapsed = result
+                metrics.record_query(elapsed)
 
-            display_status("Response Complete", "DONE", elapsed, mode="Agent")
+                # Pick up any file discovered during streaming
+                discovered_file = stream_agent_response._last_file
+                if discovered_file:
+                    state.last_generated_file = discovered_file
 
-            if response_text:
-                chat_history.append(AIMessage(content=response_text))
-                # Keep last 20 turns + system prompt
-                if len(chat_history) > 21:
-                    chat_history = [chat_history[0]] + chat_history[-20:]
+                if response_text:
+                    state.chat_history.append(AIMessage(content=response_text))
+                    # Keep last N turns + system prompt
+                    if len(state.chat_history) > MAX_HISTORY_TURNS + 1:
+                        state.chat_history = [state.chat_history[0]] + state.chat_history[-MAX_HISTORY_TURNS:]
 
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted. Type 'quit' to exit.[/yellow]")
@@ -416,24 +557,25 @@ async def main_async():
         except Exception as e:
             error_msg = str(e)
             if "memory" in error_msg.lower():
-                console.print("\n[bold red]✕ ERROR: Out of memory. Try a smaller model.[/bold red]")
+                print_error("Out of memory.", "Try a smaller model.")
             elif "not found" in error_msg.lower():
-                console.print(f"\n[bold red]✕ ERROR: Model not found. Run 'ollama pull {LLM_MODEL}'[/bold red]")
+                print_error("Model not found.", f"Run 'ollama pull {LLM_MODEL}'")
             elif "connection" in error_msg.lower() or "connect" in error_msg.lower():
-                console.print("\n[bold red]✕ ERROR: Cannot connect to Ollama. Run 'ollama serve'[/bold red]")
+                print_error("Cannot connect to Ollama.", "Run 'ollama serve'")
             else:
-                console.print(f"\n[bold red]✕ Unexpected Error: {e}[/bold red]")
+                print_error(f"Unexpected Error: {e}")
             logger.error(f"Main loop error: {e}")
-            display_status("Error Handler", "ERROR", 0.0)
+            display_status("ERROR", 0.0)
 
 
-def main():
+def main() -> None:
     """Synchronous wrapper for async main loop"""
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
     finally:
+        get_cache().close()
         wrapper = get_async_wrapper()
         wrapper.shutdown()
         console.print("[dim]Async tools shut down.[/dim]")

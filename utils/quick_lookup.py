@@ -187,9 +187,9 @@ class QuickLookupBypass:
                  "category": "podiums"},
             ),
             (
-                r"most\s+(?:world\s+)?(?:championships?|titles?)"
+                r"most\s+(?:f1\s+)?(?:world\s+)?(?:championships?|titles?)"
                 r"|all.?time\s+(?:championships?|titles?)"
-                r"|most\s+f1\s+titles?",
+                r"|most\s+f1\s+(?:world\s+)?(?:championships?|titles?)",
                 {"tool": f1_all_time_records, "name": "Championship Records",
                  "category": "titles"},
             ),

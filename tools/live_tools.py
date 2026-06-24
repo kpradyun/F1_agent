@@ -5,8 +5,6 @@ Real-time F1 data tools for weather, positions, and intervals
 import logging
 import asyncio
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import fastf1.plotting
 from langchain_core.tools import tool

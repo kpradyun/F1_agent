@@ -11,8 +11,8 @@ from unittest.mock import patch, MagicMock, AsyncMock
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def run(coro):
-    """Run an async coroutine in a test."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Run an async coroutine in a test (compatible with pytest-asyncio auto mode)."""
+    return asyncio.run(coro)
 
 
 # ── analysis_tools ────────────────────────────────────────────────────────────

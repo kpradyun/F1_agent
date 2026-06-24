@@ -1,6 +1,7 @@
 """
 Validation utilities for F1 Agent
 """
+from __future__ import annotations
 from config.settings import FASTF1_MIN_YEAR, FASTF1_MAX_YEAR
 
 

@@ -4,11 +4,9 @@ F1 advanced analysis tools for telemetry, strategy, and championship calculation
 """
 import logging
 import os
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from langchain_core.tools import tool
-from config.settings import DATA_DEFAULT_YEAR, MIN_REPLAY_YEAR, PLOTS_DIR
+from config.settings import DATA_DEFAULT_YEAR, FASTF1_MIN_YEAR, PLOTS_DIR
 from core.fastf1_adapter import (
     get_schedule,
     get_session_results,
@@ -180,7 +178,7 @@ async def f1_race_weekend_summary(
     except Exception as e:
         output += f"[TRACK POSITIONS] Failed: {e}\n\n"
 
-    if year >= MIN_REPLAY_YEAR and grand_prix != "latest":
+    if year >= FASTF1_MIN_YEAR and grand_prix != "latest":
         try:
             from core.fastf1_adapter import load_session
             race_session = await wrapper.run_sync_tool(load_session, year, grand_prix, "Race")

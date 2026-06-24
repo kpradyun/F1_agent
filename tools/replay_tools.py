@@ -5,7 +5,7 @@ Interactive race replay functionality
 import logging
 import threading
 from langchain_core.tools import tool
-from config.settings import DATA_DEFAULT_YEAR, MIN_REPLAY_YEAR
+from config.settings import DATA_DEFAULT_YEAR, FASTF1_MIN_YEAR
 from core.fastf1_adapter import prepare_replay_data
 from rich.console import Console
 
@@ -32,8 +32,8 @@ async def f1_race_replay(
         Status message about the replay window.
     """
     # The repository relies on detailed telemetry, usually best after 2018
-    if year < MIN_REPLAY_YEAR:
-        return f"Replay available for {MIN_REPLAY_YEAR}+ only (telemetry data limitation)."
+    if year < FASTF1_MIN_YEAR:
+        return f"Replay available for {FASTF1_MIN_YEAR}+ only (telemetry data limitation)."
 
     try:
         console.print(

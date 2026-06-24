@@ -47,3 +47,9 @@ jobs:
           python -m pytest tests/test_tool_error_handling.py \
                            -v --tb=short
         continue-on-error: true
+
+      - name: Lint with ruff
+        run: |
+          pip install ruff
+          ruff check . --select E,F,W,I --ignore E501
+        continue-on-error: true

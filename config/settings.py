@@ -6,6 +6,15 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 
+__all__ = [
+    "TODAY", "LOG_LEVEL", "LOG_FORMAT", "LOG_FILE",
+    "DATA_DEFAULT_YEAR", "FASTF1_MIN_YEAR", "FASTF1_MAX_YEAR",
+    "CACHE_DIR", "PLOTS_DIR", "DATA_DIR", "RAG_DB_DIR",
+    "GEMINI_API_KEY", "LLM_PROVIDER", "LLM_MODEL", "GEMINI_MODEL", "LLM_TEMPERATURE",
+    "API_TIMEOUT", "API_MAX_RETRIES", "OPENF1_BASE_URL", "JOLPICA_BASE_URL",
+    "GRID_CONTEXT", "ensure_directories",
+]
+
 # Load environment variables
 load_dotenv()
 
@@ -18,7 +27,6 @@ API_MAX_RETRIES = 3
 
 # === Data Configuration ===
 DATA_DEFAULT_YEAR = datetime.now().year
-MIN_REPLAY_YEAR = 2018  # Telemetry data availability
 
 # === Directory Structure ===
 CACHE_DIR = "cache"
@@ -40,10 +48,10 @@ _default_provider = "gemini" if GEMINI_API_KEY else "ollama"
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", _default_provider).lower()
 LLM_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-LLM_TEMPERATURE = 0.3
+LLM_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.3"))
 
 # === Logging Configuration ===
-LOG_LEVEL = "INFO"
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 
 # === Date ===
@@ -65,12 +73,10 @@ BASELINE 2026 F1 GRID (11 TEAMS, 22 DRIVERS):
 11. Cadillac (NEW): Sergio Perez & Valtteri Bottas
 """
 
+
 # === Ensure directories exist ===
 def ensure_directories():
     """Create required directories if they don't exist"""
     for directory in [CACHE_DIR, PLOTS_DIR, DATA_DIR]:
         if not os.path.exists(directory):
             os.makedirs(directory)
-
-# Auto-create directories on import
-ensure_directories()
